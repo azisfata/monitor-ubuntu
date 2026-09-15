@@ -61,8 +61,9 @@
 
 ### 2. 🚀 Unified Apps & PM2 Manager
 - Menyatukan daftar Web Portal dan PM2 Service dalam satu grid kartu interaktif.
+- **Dual-Layer Health Check Verification**: Memverifikasi status hidup aplikasi secara berlapis (proses PM2 berstatus `online` **DAN** socket port web benar-benar telah terbuka & merespons), sehingga saat aplikasi sedang restart/booting (*cold start*), indikator akan menampilkan warna **Merah/Oranye (`starting...` / `restarting...`)** sampai port benar-benar siap melayani koneksi.
 - **Smart URL Resolving**: Menyesuaikan IP/Domain klien secara otomatis, atau dikunci ke `127.0.0.1` (misal untuk `dsh-web`) yang siap diakses via SSH Port Forwarding.
-- **Live Metrics Badge**: Menampilkan persentase CPU, pemakaian RAM, dan uptime tiap aplikasi secara individual.
+- **Live Metrics Badge**: Menampilkan persentase CPU, pemakaian RAM, dan uptime/status tiap aplikasi secara individual.
 - **Quick Action Buttons**: Tombol interaktif untuk **Restart (↻)**, **Stop (■)**, dan **Start (▶)** aplikasi langsung dari browser.
 
 ### 3. 📄 Interactive Quick Log Viewer
