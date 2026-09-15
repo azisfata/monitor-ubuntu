@@ -133,8 +133,8 @@ footer{color:#484f58;font-size:12px;text-align:center;margin-top:26px}
 <button class=lout onclick="logout()">keluar</button></div></header><main>
 <section><div class=grid id=sys></div></section>
 <section><h2>apps <span class=n id=an></span></h2><div class=wgrid id=apps></div></section>
+<details open><summary><h2>processes <span class=n id=rn></span></h2></summary><div class=list id=proc style="margin-top:10px"></div></details>
 <details><summary><h2>ports & services <span class=n id=sn></span></h2></summary><div class=list id=svc style="margin-top:10px"></div></details>
-<details><summary><h2>processes <span class=n id=rn></span></h2></summary><div class=list id=proc style="margin-top:10px"></div></details>
 <details><summary><h2>nginx vhosts <span class=n id=nn></span></h2></summary><div class=chips id=ngx style="margin-top:10px"></div></details>
 <footer>auto-refresh 3s · <span id=h></span></footer></main>
 <script>
