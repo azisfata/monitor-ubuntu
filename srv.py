@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Monitor server satu file, stdlib only. Run: pm2 start srv.py --name monitor --interpreter python3"""
-# ponytail: tanpa auth (samakan postur adminer:9090); butuh batasan -> taruh di balik nginx basic_auth.
 import concurrent.futures as cf
+import hashlib
 import hmac
 import http.client
 import json
@@ -12,11 +12,15 @@ import shutil
 import socket
 import ssl
 import subprocess
+import threading
 import time
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("PORT", 8899))
+
+
 def _load_token():
     if os.environ.get("MONITOR_TOKEN"):
         return os.environ["MONITOR_TOKEN"]
@@ -26,12 +30,91 @@ def _load_token():
     except Exception:
         return "ganti-saya"
 
+
 TOKEN = _load_token()
 USER = {os.environ.get("MONITOR_USER", "fata"): os.environ.get("MONITOR_PASS", "1232")}
 SESSION_TTL = 30 * 24 * 3600  # 30 hari login
-
-import hashlib
 PASS = {u: hashlib.sha256(p.encode()).hexdigest() for u, p in USER.items()}
+
+
+def _load_wa_admin():
+    if os.environ.get("MONITOR_WA_ADMIN"):
+        return os.environ["MONITOR_WA_ADMIN"].strip()
+    try:
+        env_path = "/home/fata/.hermes/.env"
+        if os.path.isfile(env_path):
+            with open(env_path) as f:
+                for line in f:
+                    if line.startswith("WHATSAPP_ALLOWED_USERS="):
+                        val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        return val.split(",")[0].strip()
+    except Exception:
+        pass
+    return None
+
+
+_WA_ADMIN = _load_wa_admin()
+_alert_cooldown = {}
+_prev_pm2_states = {}
+
+
+def send_wa_alert(message):
+    if not _WA_ADMIN:
+        return False
+    try:
+        payload = json.dumps({
+            "chatId": f"{_WA_ADMIN}@s.whatsapp.net",
+            "message": f"⚠️ *[SERVER MONITOR]*\n{message}"
+        }).encode("utf-8")
+        req = urllib.request.Request("http://127.0.0.1:3105/send", data=payload,
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as res:
+            return res.status == 200
+    except Exception:
+        return False
+
+
+def alert_worker():
+    global _prev_pm2_states
+    time.sleep(15)  # delay saat start
+    while True:
+        try:
+            # 1. Cek status PM2 apps
+            out = subprocess.run(["pm2", "jlist"], capture_output=True, text=True, timeout=5).stdout
+            current_states = {}
+            for p in json.loads(out):
+                name = p["name"]
+                st = p.get("pm2_env", {}).get("status", "unknown")
+                current_states[name] = st
+                if _prev_pm2_states:
+                    prev_st = _prev_pm2_states.get(name)
+                    now_ts = time.time()
+                    if prev_st == "online" and st in ("errored", "stopped"):
+                        if now_ts - _alert_cooldown.get(f"pm2_{name}", 0) > 1800:
+                            send_wa_alert(f"🚨 *PM2 App Error!*\nAplikasi `{name}` berubah status dari *online* menjadi *{st}*.")
+                            _alert_cooldown[f"pm2_{name}"] = now_ts
+                    elif prev_st in ("errored", "stopped") and st == "online":
+                        send_wa_alert(f"✅ *PM2 App Recovered!*\nAplikasi `{name}` sudah kembali *online*.")
+                        _alert_cooldown.pop(f"pm2_{name}", None)
+            _prev_pm2_states = current_states
+
+            # 2. Cek threshold RAM & Disk
+            m = mem()
+            if m.get("MemTotal"):
+                used_pct = round(100 * (m["MemTotal"] - m.get("MemAvailable", m["MemTotal"])) / m["MemTotal"], 1)
+                now_ts = time.time()
+                if used_pct >= 90 and now_ts - _alert_cooldown.get("ram_high", 0) > 1800:
+                    send_wa_alert(f"🚨 *RAM Kritis!*\nPemakaian RAM mencapai *{used_pct}%*.")
+                    _alert_cooldown["ram_high"] = now_ts
+            du = shutil.disk_usage("/")
+            disk_pct = round(100 * du.used / du.total, 1)
+            now_ts = time.time()
+            if disk_pct >= 90 and now_ts - _alert_cooldown.get("disk_high", 0) > 1800:
+                send_wa_alert(f"🚨 *Disk Storage Kritis!*\nPartisi root `/` mencapai *{disk_pct}%*.")
+                _alert_cooldown["disk_high"] = now_ts
+        except Exception:
+            pass
+        time.sleep(60)
 
 
 def new_sid(user="fata"):
@@ -58,14 +141,27 @@ def valid_sid(sid):
         return False
     expected_sig = hmac.new(TOKEN.encode(), f"{user}:{exp}".encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(sig, expected_sig)
+
+
 KNOWN = {22: "ssh", 53: "dns", 80: "nginx", 443: "nginx", 3000: "sapa-server",
          3080: "dsh-web", 3105: "hermes-wa", 5432: "postgres", 6379: "redis",
          8080: "link-shortener", 8899: "monitor", 9119: "hermes-dashboard",
          9090: "adminer", 9091: "cockpit", 20128: "9router"}
-HIDE = {20241}  # port internal dinamis, disembunyikan (cek ulang bila ganti reboot)
+HIDE = {20241}  # port internal dinamis, disembunyikan
 _prev_cpu = None
-_BIND = {}  # port -> host, diisi listeners() dari alamat bind ss
-_PORT_NAMES = {}  # port -> dynamic process name, diisi listeners() dari ss -tlnpH
+_prev_net = None
+_BIND = {}
+_PORT_NAMES = {}
+
+WEB = [{"port": 8080, "name": "link-shortener", "path": "/", "desc": "s.kemenkopmk.go.id"},
+       {"port": 9090, "name": "adminer", "path": "/", "desc": "db admin"},
+       {"port": 9091, "name": "cockpit", "path": "/", "desc": "server admin"},
+       {"port": 20128, "name": "9router", "path": "/dashboard", "desc": "tunnel dash"},
+       {"port": 3080, "name": "dsh-web", "path": "/", "desc": "deepseek harness"},
+       {"port": 9119, "name": "hermes-dashboard", "path": "/", "desc": "hermes web ui"},
+       {"port": 3000, "name": "sapa-server", "path": "/", "desc": "backend sapa"},
+       {"port": 8899, "name": "monitor", "path": "/", "desc": "server monitor"},
+       {"name": "sapa-web", "url": "https://sapa.kemenkopmk.go.id", "desc": "portal sapa"}]
 
 PAGE = """<!doctype html><html><head><meta charset=utf-8><meta name=viewport
 content="width=device-width,initial-scale=1"><title>monitor</title><style>
@@ -73,6 +169,8 @@ content="width=device-width,initial-scale=1"><title>monitor</title><style>
 body{margin:0;background:radial-gradient(1200px 400px at 50% -100px,#162033,#0b0e14);color:#e6edf3;font:15px/1.45 system-ui,-apple-system,sans-serif;min-height:100vh}
 header{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:rgba(11,14,20,.88);backdrop-filter:blur(10px);border-bottom:1px solid #262d36}
 header b{font-size:16px}
+.h-right{display:flex;align-items:center;gap:10px}
+.net-badge{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:3px 8px;font-size:11.5px;color:#79c0ff;font-variant-numeric:tabular-nums;display:inline-flex;align-items:center;gap:6px}
 .live{display:flex;align-items:center;gap:7px;font-size:12px;color:#8b949e;font-variant-numeric:tabular-nums}
 .live i{width:9px;height:9px;border-radius:50%;background:#3fb950;animation:pl 2s infinite}
 @keyframes pl{50%{opacity:.35}}.live.off i{background:#f85149;animation:none}
@@ -117,7 +215,16 @@ em{flex:none;font-style:normal;font-size:11px;font-weight:700;padding:3px 10px;b
 em.ok{background:rgba(63,185,80,.14);color:#3fb950}em.bad{background:rgba(248,81,73,.14);color:#f85149}
 .mv{font-size:12px;color:#8b949e;font-variant-numeric:tabular-nums;flex:none}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
-.chip{background:#141922;border:1px solid #262d36;padding:6px 12px;border-radius:99px;font-size:12px;color:#8b949e}
+.chip{background:#141922;border:1px solid #262d36;padding:6px 12px;border-radius:99px;font-size:12px;color:#8b949e;display:inline-flex;align-items:center;gap:6px}
+.chip.ok{border-color:rgba(63,185,80,.3);color:#7ee787}
+.chip.bad{border-color:rgba(248,81,73,.3);color:#ffa198}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);z-index:99;display:none;align-items:center;justify-content:center;padding:16px}
+.modal-bg.open{display:flex}
+.modal-box{background:#0d1117;border:1px solid #30363d;border-radius:14px;width:100%;max-width:780px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 40px rgba(0,0,0,.8)}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:#161b22;border-bottom:1px solid #30363d}
+.modal-head b{font-size:14px;color:#e6edf3}
+.modal-body{padding:12px;overflow-y:auto;flex:1;background:#090d13}
+.modal-body pre{margin:0;font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9d1d9;white-space:pre-wrap;word-break:break-all}
 footer{color:#484f58;font-size:12px;text-align:center;margin-top:26px}
 .login{max-width:320px;margin:18vh auto 0;padding:26px 22px;text-align:center}
 .login h1{font-size:20px;margin:0 0 4px}.login p{color:#8b949e;font-size:13px;margin:0 0 16px}
@@ -128,16 +235,24 @@ footer{color:#484f58;font-size:12px;text-align:center;margin-top:26px}
 @media(min-width:600px){.grid{grid-template-columns:repeat(3,1fr)}.wgrid{grid-template-columns:repeat(2,1fr)}}
 @media(min-width:900px){main{padding:6px 20px 40px}.grid{grid-template-columns:repeat(6,1fr)}.wgrid{grid-template-columns:repeat(3,1fr)}}
 </style></head><body><header><b>⚙️ server</b>
-<div><span class=live id=live><i></i><span id=ts>…</span></span>
+<div class=h-right>
+<span class=net-badge id=net>↓ 0 KB/s · ↑ 0 KB/s</span>
+<span class=live id=live><i></i><span id=ts>…</span></span>
 <button class=lout onclick="logout()">keluar</button></div></header><main>
 <section><div class=grid id=sys></div></section>
 <section><h2>apps <span class=n id=an></span></h2><div class=wgrid id=apps></div></section>
 <details open><summary><h2>processes <span class=n id=rn></span></h2></summary><div class=list id=proc style="margin-top:10px"></div></details>
+<details><summary><h2>docker <span class=n id=dn></span></h2></summary><div class=chips id=doc style="margin-top:10px"></div></details>
+<details><summary><h2>systemd <span class=n id=sdn></span></h2></summary><div class=chips id=sd style="margin-top:10px"></div></details>
 <details><summary><h2>ports & services <span class=n id=sn></span></h2></summary><div class=list id=svc style="margin-top:10px"></div></details>
 <details><summary><h2>nginx vhosts <span class=n id=nn></span></h2></summary><div class=chips id=ngx style="margin-top:10px"></div></details>
 <footer>auto-refresh 3s · <span id=h></span></footer></main>
+<div class=modal-bg id=m-bg onclick="if(event.target===this)closeLog()">
+<div class=modal-box><div class=modal-head><b id=m-title>📋 Logs</b><div style="display:flex;align-items:center;gap:6px"><button class=btn onclick="refreshLog()">↻ refresh</button><button class=btn onclick="copyLog()">📋 copy</button><button class=btn onclick="closeLog()">✕ tutup</button></div></div><div class=modal-body><pre id=m-logs>Memuat log...</pre></div></div>
+</div>
 <script>
 const g=id=>document.getElementById(id);
+let curLogApp=null;
 function clr(pct){
 if(pct>=90)return'#f85149';
 if(pct>=75)return'#f0883e';
@@ -158,11 +273,13 @@ const arc=`<path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="${c}" strok
 return `<div class="card metric"><svg viewBox="0 0 100 58"><path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="#212733" stroke-width="6.5" stroke-linecap="round"/>${arc}<text x="50" y="37" text-anchor="middle" fill="#e6edf3" font-size="${fz}" font-weight="700" font-family="system-ui,-apple-system,sans-serif">${valStr}</text><text x="50" y="52" text-anchor="middle" fill="#8b949e" font-size="9px" letter-spacing="0.08em" font-family="system-ui,-apple-system,sans-serif">${l.toUpperCase()}</text></svg></div>`}
 async function tick(){try{const d=await(await fetch('/api')).json();
 g('ts').textContent=d.time;g('live').classList.remove('off');g('h').textContent=location.hostname;
+if(d.net_rx&&d.net_tx)g('net').textContent=`↓ ${d.net_rx} · ↑ ${d.net_tx}`;
 const loadVal=parseFloat(d.load.split(' ')[0])||0;
 const loadPct=Math.min(100,Math.round((loadVal/(d.cores||4))*100));
 const uptimeStr=d.uptime.replace(/^0d\\s*/,'').replace(/^0h\\s*/,'')||d.uptime;
+const swapStr=d.swap_used_gb?`${d.swap_used_gb}G`:'0G';
 g('sys').innerHTML=metric('cpu',d.cpu,d.cpu,'%')+metric('mem',d.mem_pct,d.mem_pct,'%')
-+metric('disk',d.disk_pct,d.disk_pct,'%')+metric('load',d.load.split(' ')[0],loadPct)+metric('uptime',uptimeStr,null)+metric('procs',d.nproc,null);
++metric('disk',d.disk_pct,d.disk_pct,'%')+metric('load',d.load.split(' ')[0],loadPct)+metric('uptime',uptimeStr,null)+metric('swap',swapStr,null);
 g('sn').textContent=d.services.length;g('rn').textContent=d.top.length;
 g('svc').innerHTML=d.services.map(s=>`<div class=row><code>:${s.port}</code><div class=tx><b>${s.name}</b><small>${s.via} · ${s.detail}</small></div><em class=${s.ok?'ok':'bad'}>${s.ok?'●':'○'}</em></div>`).join('');
 const h=location.hostname;
@@ -185,17 +302,39 @@ items.push({name:p.name,link:null,sub:`pm2 service · ${p.status}`,ok:p.status==
 g('an').textContent=items.length;
 g('apps').innerHTML=items.map(it=>{
 const tit=it.link?`<a class=wtit target=_blank rel="noreferrer noopener" href="${it.link}"><span class="dot ${it.ok?'ok':'bad'}"></span><b>${it.name}</b><span class=arr>↗</span></a>`:`<div class=wtit><span class="dot ${it.ok?'ok':'bad'}"></span><b>${it.name}</b></div>`;
-const acts=it.pm2?`<div class=aa><button class=btn title="Restart ${it.pm2.name}" onclick="act('${it.pm2.name}','restart')">↻</button>${it.pm2.status=='online'?`<button class="btn stop" title="Stop ${it.pm2.name}" onclick="act('${it.pm2.name}','stop')">■</button>`:`<button class="btn start" title="Start ${it.pm2.name}" onclick="act('${it.pm2.name}','start')">▶</button>`}</div>`:'';
+const acts=it.pm2?`<div class=aa><button class=btn title="Lihat Log" onclick="showLog('${it.pm2.name}')">📄 log</button><button class=btn title="Restart ${it.pm2.name}" onclick="act('${it.pm2.name}','restart')">↻</button>${it.pm2.status=='online'?`<button class="btn stop" title="Stop ${it.pm2.name}" onclick="act('${it.pm2.name}','stop')">■</button>`:`<button class="btn start" title="Start ${it.pm2.name}" onclick="act('${it.pm2.name}','start')">▶</button>`}</div>`:'';
 const meta=it.pm2?`<span class=wam><span>${it.pm2.cpu}</span><span>${it.pm2.mem}</span><span>up ${it.pm2.uptime}</span></span>`:'';
 return `<div class=card-app><div class=wtop>${tit}${acts}</div><div class=wbot><span class=wsub>${it.sub}</span>${meta}</div></div>`;
 }).join('');
 g('ngx').innerHTML=d.nginx.map(n=>`<span class=chip>${n}</span>`).join('')||'<span class=chip>n/a</span>';g('nn').textContent=d.nginx.length;
 g('proc').innerHTML=d.top.map(p=>`<div class=row><code>${p.pid}</code><div class=tx><b>${p.name}</b></div><span class=mv>${p.mem}</span></div>`).join('');
+g('doc').innerHTML=(d.docker||[]).map(c=>`<span class="chip ${c.ok?'ok':'bad'}"><span class="dot ${c.ok?'ok':'bad'}"></span><b>${c.name}</b> <small>(${c.status})</small></span>`).join('')||'<span class=chip>tidak ada container aktif</span>';
+g('dn').textContent=(d.docker||[]).length;
+g('sd').innerHTML=(d.systemd||[]).map(s=>`<span class="chip ${s.ok?'ok':'bad'}"><span class="dot ${s.ok?'ok':'bad'}"></span>${s.name} <small>(${s.status})</small></span>`).join('')||'<span class=chip>n/a</span>';
+g('sdn').textContent=(d.systemd||[]).length;
 }catch(e){g('ts').textContent='offline';g('live').classList.add('off')}}setInterval(tick,3000);tick()
 async function act(name,op){if(op!='start'&&!confirm(`${op} ${name}?`))return;
 const r=await fetch('/act',{method:'POST',body:JSON.stringify({name,op})});
 if(r.status==401){location.href='/login';return}
 alert(r.ok?`${op} ${name} ok`:'gagal: '+await r.text());tick()}
+async function showLog(name){
+curLogApp=name;
+g('m-title').textContent=`📋 Logs: ${name}`;
+g('m-logs').textContent='Mengambil log...';
+g('m-bg').classList.add('open');
+refreshLog();
+}
+async function refreshLog(){
+if(!curLogApp)return;
+try{
+const r=await fetch(`/logs?name=${encodeURIComponent(curLogApp)}&lines=60`);
+if(r.status==401){location.href='/login';return}
+const d=await r.json();
+g('m-logs').textContent=d.logs||'(log kosong)';
+}catch(e){g('m-logs').textContent='Gagal memuat log: '+e}}
+function copyLog(){navigator.clipboard.writeText(g('m-logs').textContent);alert('Log berhasil disalin ke clipboard!')}
+function closeLog(){g('m-bg').classList.remove('open');curLogApp=null}
+window.addEventListener('keydown',e=>{if(e.key==='Escape')closeLog()});
 async function logout(){await fetch('/logout',{method:'POST'});location.href='/login'}</script></body></html>"""
 
 LOGIN = """<!doctype html><html><head><meta charset=utf-8><meta name=viewport
@@ -233,9 +372,42 @@ def mem():
     with open("/proc/meminfo") as f:
         for line in f:
             k, v = line.split(":")
-            if k in ("MemTotal", "MemAvailable"):
-                d[k] = int(v.split()[0])
+            if k in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
+                d[k.strip()] = int(v.split()[0])
     return d
+
+
+def net_speed():
+    global _prev_net
+    now = time.time()
+    rx_total = 0
+    tx_total = 0
+    try:
+        with open("/proc/net/dev") as f:
+            for l in f.readlines()[2:]:
+                parts = l.split(":")
+                if len(parts) == 2 and parts[0].strip() != "lo":
+                    cols = parts[1].split()
+                    rx_total += int(cols[0])
+                    tx_total += int(cols[8])
+    except Exception:
+        return "0 KB/s", "0 KB/s"
+
+    if _prev_net:
+        prx, ptx, pt = _prev_net
+        dt = max(0.5, now - pt)
+        rx_s = (rx_total - prx) / dt
+        tx_s = (tx_total - ptx) / dt
+
+        def fmt(bps):
+            if bps >= 1048576:
+                return f"{bps / 1048576:.1f} MB/s"
+            return f"{bps / 1024:.0f} KB/s"
+        res = (fmt(rx_s), fmt(tx_s))
+    else:
+        res = ("0 KB/s", "0 KB/s")
+    _prev_net = (rx_total, tx_total, now)
+    return res
 
 
 def listeners(pm2_map=None):
@@ -270,7 +442,6 @@ def listeners(pm2_map=None):
                 p_name = m_proc.group(1).split()[0].replace('"', '')
             if p_name and port not in _PORT_NAMES:
                 _PORT_NAMES[port] = p_name
-        # buang port ephemeral (>32768) yg tak dikenal + HIDE: itu koneksi sementara, bukan servis
         return sorted(p for p in ports if p in KNOWN or (p < 32768 and p not in HIDE))
     except Exception:
         return sorted(KNOWN)
@@ -296,7 +467,7 @@ def check_http(port, https=False):
 
 
 def check_tcp(port):
-    host = target(port).split("%")[0]  # kupas suffix scope ipv6 (%lo dsb)
+    host = target(port).split("%")[0]
     try:
         socket.create_connection((host, port), timeout=2).close()
         return True, "open"
@@ -309,7 +480,6 @@ def check_one(port):
     if port == 443:
         ok, d = check_http(port, https=True)
         return {"port": port, "name": name, "via": "https", "ok": ok, "detail": d}
-    # Coba HTTP jika port web atau coba HTTP auto-probe
     ok_http, d_http = check_http(port)
     if ok_http:
         return {"port": port, "name": name, "via": "http", "ok": True, "detail": d_http}
@@ -331,9 +501,9 @@ def pm2():
             if pid:
                 mapping[str(pid)] = p["name"]
             rows.append({"name": p["name"], "status": e.get("status", "?"),
-                         "cpu": f"{p.get('monit', {}).get('cpu', '?')}%",
-                         "mem": f"{round(mon.get('memory', 0)/1048576)}MB" if mon.get("memory") else "-",
-                         "uptime": ups})
+                          "cpu": f"{p.get('monit', {}).get('cpu', '?')}%",
+                          "mem": f"{round(mon.get('memory', 0)/1048576)}MB" if mon.get("memory") else "-",
+                          "uptime": ups})
         return rows, mapping
     except Exception:
         return [], {}
@@ -351,6 +521,43 @@ def nginx():
         return vhosts
     except Exception:
         return []
+
+
+def docker_containers():
+    try:
+        r = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"],
+                           capture_output=True, text=True, timeout=3)
+        res = []
+        for l in r.stdout.strip().splitlines():
+            if not l.strip():
+                continue
+            parts = l.split("\t")
+            name = parts[0]
+            st = parts[1] if len(parts) > 1 else ""
+            img = parts[2] if len(parts) > 2 else ""
+            res.append({"name": name, "status": st, "image": img, "ok": "Up" in st})
+        return res
+    except Exception:
+        return []
+
+
+def systemd_services():
+    units = ["tailscaled", "nginx", "docker", "ssh", "postgresql", "redis-server", "hermes-gateway"]
+    res = []
+    for u in units:
+        try:
+            r = subprocess.run(["systemctl", "is-active", u], capture_output=True, text=True, timeout=2)
+            st = r.stdout.strip()
+            if st != "active":
+                r_u = subprocess.run(["systemctl", "--user", "is-active", u], capture_output=True, text=True, timeout=2)
+                st_u = r_u.stdout.strip()
+                if st_u == "active":
+                    st = st_u
+            st = st or "inactive"
+            res.append({"name": u, "status": st, "ok": st == "active"})
+        except Exception:
+            pass
+    return res
 
 
 def _clean_name(pid, raw_name, pm2_map):
@@ -389,17 +596,6 @@ def top(pm2_map=None):
     rows.sort(key=lambda r: -r["kb"])
     return [{"pid": r["pid"], "name": r["name"],
              "mem": f"{r['kb']//1024}MB" if r["kb"] >= 1024 else f"{r['kb']}KB"} for r in rows[:8]]
-
-
-WEB = [{"port": 8080, "name": "link-shortener", "path": "/", "desc": "s.kemenkopmk.go.id"},
-       {"port": 9090, "name": "adminer", "path": "/", "desc": "db admin"},
-       {"port": 9091, "name": "cockpit", "path": "/", "desc": "server admin"},
-       {"port": 20128, "name": "9router", "path": "/dashboard", "desc": "tunnel dash"},
-       {"port": 3080, "name": "dsh-web", "path": "/", "desc": "deepseek harness"},
-       {"port": 9119, "name": "hermes-dashboard", "path": "/", "desc": "hermes web ui"},
-       {"port": 3000, "name": "sapa-server", "path": "/", "desc": "backend sapa"},
-       {"port": 8899, "name": "monitor", "path": "/", "desc": "server monitor"},
-       {"name": "sapa-web", "url": "https://sapa.kemenkopmk.go.id", "desc": "portal sapa"}]
 
 
 def site_ok(url):
@@ -442,7 +638,12 @@ def dsh_token():
 
 def snapshot():
     m = mem()
-    used = m["MemTotal"] - m["MemAvailable"]
+    used = m.get("MemTotal", 0) - m.get("MemAvailable", 0)
+    sw_tot = m.get("SwapTotal", 0)
+    sw_free = m.get("SwapFree", 0)
+    sw_used = sw_tot - sw_free
+    sw_used_gb = round(sw_used / 1048576, 1) if sw_tot else 0
+    rx_s, tx_s = net_speed()
     du = shutil.disk_usage("/")
     with open("/proc/loadavg") as f:
         load = " ".join(f.read().split()[:3])
@@ -462,12 +663,15 @@ def snapshot():
             item["path"] = f"/?token={tok}"
         web_list.append(item)
     return {"time": time.strftime("%H:%M:%S"),
-            "cpu": cpu_pct(), "mem_pct": round(100 * used / m["MemTotal"], 1),
+            "cpu": cpu_pct(), "mem_pct": round(100 * used / m["MemTotal"], 1) if m.get("MemTotal") else 0,
             "disk_pct": round(100 * du.used / du.total, 1), "load": load, "cores": os.cpu_count() or 1,
             "uptime": f"{s//86400}d {s%86400//3600}h {s%3600//60}m",
+            "swap_used_gb": sw_used_gb,
+            "net_rx": rx_s, "net_tx": tx_s,
             "nproc": len([p for p in os.listdir('/proc') if p.isdigit()]),
             "services": svcs, "web": web_list, "sites": sites,
-            "pm2": pm2_rows, "nginx": nginx(), "top": top(pm2_map)}
+            "pm2": pm2_rows, "nginx": nginx(), "top": top(pm2_map),
+            "docker": docker_containers(), "systemd": systemd_services()}
 
 
 class H(BaseHTTPRequestHandler):
@@ -525,7 +729,7 @@ class H(BaseHTTPRequestHandler):
                 ["pm2", "jlist"], capture_output=True, text=True, timeout=5).stdout)]
         except Exception:
             return self._send(500, b"pm2 error")
-        if name not in names:  # allowlist: hanya app pm2 yang ada
+        if name not in names:
             return self._send(400, b"unknown app")
         r = subprocess.run(["pm2", op, name], capture_output=True, text=True, timeout=30)
         return self._send(200 if r.returncode == 0 else 500, (r.stderr or r.stdout or "ok").encode())
@@ -547,6 +751,25 @@ class H(BaseHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 return
+        elif self.path.startswith("/logs?"):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            name = qs.get("name", [""])[0]
+            lines = int(qs.get("lines", [50])[0])
+            lines = min(max(10, lines), 200)
+            try:
+                names = [p["name"] for p in json.loads(subprocess.run(
+                    ["pm2", "jlist"], capture_output=True, text=True, timeout=5).stdout)]
+            except Exception:
+                names = []
+            if name not in names:
+                return self._send(400, b"unknown app")
+            try:
+                out = subprocess.run(["pm2", "logs", name, "--lines", str(lines), "--nostream"],
+                                     capture_output=True, text=True, timeout=8)
+                log_text = out.stdout or out.stderr or "(tidak ada log)"
+                body, ctype = json.dumps({"name": name, "logs": log_text}).encode(), "application/json"
+            except Exception as e:
+                body, ctype = json.dumps({"name": name, "logs": f"Error: {e}"}).encode(), "application/json"
         else:
             self.send_response(404)
             self.end_headers()
@@ -560,4 +783,6 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    # Start background WhatsApp watcher
+    threading.Thread(target=alert_worker, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
