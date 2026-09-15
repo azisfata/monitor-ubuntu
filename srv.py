@@ -157,7 +157,7 @@ WEB = [{"port": 8080, "name": "link-shortener", "path": "/", "desc": "s.kemenkop
        {"port": 9090, "name": "adminer", "path": "/", "desc": "db admin"},
        {"port": 9091, "name": "cockpit", "path": "/", "desc": "server admin"},
        {"port": 20128, "name": "9router", "path": "/dashboard", "desc": "tunnel dash"},
-       {"port": 3080, "name": "dsh-web", "path": "/", "desc": "deepseek harness"},
+       {"port": 3080, "name": "dsh-web", "path": "/", "desc": "deepseek harness", "host": "127.0.0.1"},
        {"port": 9119, "name": "hermes-dashboard", "path": "/", "desc": "hermes web ui"},
        {"port": 3000, "name": "sapa-server", "path": "/", "desc": "backend sapa"},
        {"port": 8899, "name": "monitor", "path": "/", "desc": "server monitor"},
@@ -291,7 +291,7 @@ const items=(d.web||[]).map(w=>{
 knownWeb.add(w.name);
 const p=pm2Map[w.name]||null;
 const ok=w.url?d.sites?.[w.name]:(p?p.status==='online':d.services.find(s=>s.port==w.port)?.ok);
-const host=(w.host&&(h==='localhost'||h==='127.0.0.1'))?h:(w.host||h);
+const host=w.host||h;
 const link=w.url||(w.port?`http://${host}:${w.port}${w.path||'/'}`:null);
 const sub=w.url?w.url.replace('https://',''):(w.port?`${host}:${w.port} · ${w.desc}`:(w.desc||''));
 return{name:w.name,link,sub,ok,pm2:p};
