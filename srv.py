@@ -151,7 +151,7 @@ return `<div class="card metric"><svg viewBox="0 0 100 58"><path d="M 12 50 A 38
 async function tick(){try{const d=await(await fetch('/api')).json();
 g('ts').textContent=d.time;g('live').classList.remove('off');g('h').textContent=location.hostname;
 const loadVal=parseFloat(d.load.split(' ')[0])||0;
-const loadPct=Math.min(100,Math.round(loadVal*50));
+const loadPct=Math.min(100,Math.round((loadVal/(d.cores||4))*100));
 const uptimeStr=d.uptime.replace(/^0d\\s*/,'');
 g('sys').innerHTML=metric('cpu',d.cpu,d.cpu,'%')+metric('mem',d.mem_pct,d.mem_pct,'%')
 +metric('disk',d.disk_pct,d.disk_pct,'%')+metric('load',d.load.split(' ')[0],loadPct)+metric('uptime',uptimeStr,null)+metric('procs',d.nproc,null);
@@ -437,7 +437,7 @@ def snapshot():
     pm2_rows, pm2_map = pm2()
     return {"time": time.strftime("%H:%M:%S"),
             "cpu": cpu_pct(), "mem_pct": round(100 * used / m["MemTotal"], 1),
-            "disk_pct": round(100 * du.used / du.total, 1), "load": load,
+            "disk_pct": round(100 * du.used / du.total, 1), "load": load, "cores": os.cpu_count() or 1,
             "uptime": f"{s//86400}d {s%86400//3600}h {s%3600//60}m",
             "nproc": len([p for p in os.listdir('/proc') if p.isdigit()]),
             "services": svcs, "web": web_list, "sites": sites,
