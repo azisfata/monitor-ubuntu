@@ -277,7 +277,7 @@ if(d.net_rx&&d.net_tx)g('net').textContent=`↓ ${d.net_rx} · ↑ ${d.net_tx}`;
 const loadVal=parseFloat(d.load.split(' ')[0])||0;
 const loadPct=Math.min(100,Math.round((loadVal/(d.cores||4))*100));
 const uptimeStr=d.uptime.replace(/^0d\s*/,'').replace(/^0h\s*/,'')||d.uptime;
-const swapStr=d.swap_used_gb?`${d.swap_used_gb}G`:'0G';
+const swapStr=d.swap_total_gb?`${d.swap_used_gb}/${d.swap_total_gb}G`:`${d.swap_used_gb||0}G`;
 g('sys').innerHTML=metric('cpu',d.cpu,d.cpu,'%')+metric('mem',d.mem_pct,d.mem_pct,'%')
 +metric('disk',d.disk_pct,d.disk_pct,'%')+metric('load',d.load.split(' ')[0],loadPct)
 +metric('net ↓',d.net_rx||'0 KB/s',null)+metric('net ↑',d.net_tx||'0 KB/s',null)
@@ -669,6 +669,7 @@ def snapshot():
             "disk_pct": round(100 * du.used / du.total, 1), "load": load, "cores": os.cpu_count() or 1,
             "uptime": f"{s//86400}d {s%86400//3600}h {s%3600//60}m",
             "swap_used_gb": sw_used_gb,
+            "swap_total_gb": round(sw_tot / 1048576, 1) if sw_tot else 0,
             "net_rx": rx_s, "net_tx": tx_s,
             "nproc": len([p for p in os.listdir('/proc') if p.isdigit()]),
             "services": svcs, "web": web_list, "sites": sites,
