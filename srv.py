@@ -60,7 +60,7 @@ def valid_sid(sid):
     return hmac.compare_digest(sig, expected_sig)
 KNOWN = {22: "ssh", 53: "dns", 80: "nginx", 443: "nginx", 3000: "sapa-server",
          3080: "dsh-web", 3105: "hermes-wa", 5432: "postgres", 6379: "redis",
-         8080: "link-shortener", 8899: "monitor", 9119: "hermes-dash",
+         8080: "link-shortener", 8899: "monitor", 9119: "hermes-dashboard",
          9090: "adminer", 9091: "cockpit", 20128: "9router"}
 HIDE = {20241}  # port internal dinamis, disembunyikan (cek ulang bila ganti reboot)
 _prev_cpu = None
@@ -68,7 +68,7 @@ _BIND = {}  # port -> host, diisi listeners() dari alamat bind ss
 
 PAGE = """<!doctype html><html><head><meta charset=utf-8><meta name=viewport
 content="width=device-width,initial-scale=1"><title>monitor</title><style>
-:{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
 body{margin:0;background:radial-gradient(1200px 400px at 50% -100px,#162033,#0b0e14);color:#e6edf3;font:15px/1.45 system-ui,-apple-system,sans-serif;min-height:100vh}
 header{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:rgba(11,14,20,.88);backdrop-filter:blur(10px);border-bottom:1px solid #262d36}
 header b{font-size:16px}
@@ -93,12 +93,21 @@ h2{display:flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.09em;t
 .bar i{display:block;height:100%;border-radius:99px;background:#3fb950}
 .bar i.y{background:#d29922}.bar i.r{background:#f85149}
 .wgrid{display:grid;gap:10px;grid-template-columns:1fr}
-a.wcard{display:flex;align-items:center;gap:11px;color:inherit;text-decoration:none;background:linear-gradient(180deg,#171c26,#12161e);border:1px solid #262d36;border-radius:14px;padding:13px 14px;min-height:62px}
-a.wcard:active{background:#1c2330}
-.wt{flex:1;min-width:0}.wt b{font-size:15px}
-.wt small{display:block;color:#8b949e;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dot{width:10px;height:10px;flex:none;border-radius:50%}
-.arr{color:#8b949e;font-size:20px;line-height:1}
+.card-app{background:linear-gradient(180deg,#171c26,#12161e);border:1px solid #262d36;border-radius:14px;padding:11px 13px;display:flex;flex-direction:column;justify-content:space-between;gap:8px;min-height:72px}
+.wtop{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.wtit{display:inline-flex;align-items:center;gap:8px;color:inherit;text-decoration:none;min-width:0;flex:1}
+.wtit:hover b{color:#58a6ff}
+.wtit b{font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wtit .arr{color:#8b949e;font-size:13px;opacity:0.7}
+.dot{width:8px;height:8px;flex:none;border-radius:50%}
+.dot.ok{background:#3fb950}.dot.bad{background:#f85149}
+.wbot{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:11.5px;color:#8b949e}
+.wsub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.wam{display:inline-flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums;color:#8b949e;background:#161b22;border:1px solid #21262d;border-radius:6px;padding:2px 6px;font-size:11px}
+.aa{display:flex;align-items:center;gap:4px;flex:none}
+.btn{background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:2px 7px;font-size:11px;cursor:pointer}
+.btn:hover{background:#30363d}.btn:active{background:#2c3440}
+.btn.stop{color:#ffa198;border-color:rgba(248,81,73,.3)}.btn.start{color:#7ee787;border-color:rgba(63,185,80,.3)}
 .list{background:#11151d;border:1px solid #262d36;border-radius:14px;overflow:hidden}
 .row{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid #1b212b}
 .row:last-child{border-bottom:0}
@@ -108,15 +117,6 @@ a.wcard:active{background:#1c2330}
 em{flex:none;font-style:normal;font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px}
 em.ok{background:rgba(63,185,80,.14);color:#3fb950}em.bad{background:rgba(248,81,73,.14);color:#f85149}
 .mv{font-size:12px;color:#8b949e;font-variant-numeric:tabular-nums;flex:none}
-.app{display:flex;align-items:center;justify-content:space-between;gap:6px;background:linear-gradient(180deg,#171c26,#12161e);border:1px solid #262d36;border-radius:10px;padding:6px 10px}
-.at{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;flex:1}
-.at b{font-size:13.5px;white-space:nowrap}
-.am{display:inline-flex;align-items:center;gap:6px;color:#8b949e;font-size:11.5px;font-variant-numeric:tabular-nums}
-.aa{display:flex;align-items:center;gap:4px;flex:none}
-.btn{background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:3px 7px;font-size:11px;cursor:pointer}
-.btn:hover{background:#30363d}.btn:active{background:#2c3440}
-.btn.stop{color:#ffa198;border-color:rgba(248,81,73,.3)}.btn.start{color:#7ee787;border-color:rgba(63,185,80,.3)}
-.pgrid{display:grid;gap:8px;grid-template-columns:1fr}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{background:#141922;border:1px solid #262d36;padding:6px 12px;border-radius:99px;font-size:12px;color:#8b949e}
 footer{color:#484f58;font-size:12px;text-align:center;margin-top:26px}
@@ -126,15 +126,14 @@ footer{color:#484f58;font-size:12px;text-align:center;margin-top:26px}
 .login button{width:100%;background:#238636;border:0;color:#fff;border-radius:10px;padding:12px;font-size:15px;min-height:48px;cursor:pointer}
 .login .err{color:#f85149;font-size:13px;min-height:20px;margin-bottom:6px}
 .lout{background:none;border:1px solid #30363d;color:#8b949e;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer}
-@media(min-width:600px){.grid{grid-template-columns:repeat(3,1fr)}.wgrid{grid-template-columns:repeat(2,1fr)}.pgrid{grid-template-columns:repeat(2,1fr)}}
+@media(min-width:600px){.grid{grid-template-columns:repeat(3,1fr)}.wgrid{grid-template-columns:repeat(2,1fr)}}
 @media(min-width:900px){main{padding:6px 20px 40px}.grid{grid-template-columns:repeat(6,1fr)}.wgrid{grid-template-columns:repeat(3,1fr)}}
 </style></head><body><header><b>⚙️ server</b>
 <div><span class=live id=live><i></i><span id=ts>…</span></span>
 <button class=lout onclick="logout()">keluar</button></div></header><main>
 <section><div class=grid id=sys></div></section>
-<section><h2>web apps <span class=n id=wn></span></h2><div class=wgrid id=web></div></section>
-<details><summary><h2>pm2 <span class=n id=pn></span></h2></summary><div id=pm2 class=pgrid style="margin-top:10px"></div></details>
-<details><summary><h2>services <span class=n id=sn></span></h2></summary><div class=list id=svc style="margin-top:10px"></div></details>
+<section><h2>apps <span class=n id=an></span></h2><div class=wgrid id=apps></div></section>
+<details><summary><h2>ports & services <span class=n id=sn></span></h2></summary><div class=list id=svc style="margin-top:10px"></div></details>
 <details><summary><h2>processes <span class=n id=rn></span></h2></summary><div class=list id=proc style="margin-top:10px"></div></details>
 <details><summary><h2>nginx vhosts <span class=n id=nn></span></h2></summary><div class=chips id=ngx style="margin-top:10px"></div></details>
 <footer>auto-refresh 3s · <span id=h></span></footer></main>
@@ -146,15 +145,32 @@ async function tick(){try{const d=await(await fetch('/api')).json();
 g('ts').textContent=d.time;g('live').classList.remove('off');g('h').textContent=location.hostname;
 g('sys').innerHTML=metric('cpu',d.cpu,d.cpu,'%')+metric('mem',d.mem_pct,d.mem_pct,'%')
 +metric('disk',d.disk_pct,d.disk_pct,'%')+metric('load',d.load.split(' ')[0])+metric('uptime',d.uptime)+metric('procs',d.nproc);
-g('wn').textContent=d.web.length;g('sn').textContent=d.services.length;g('pn').textContent=d.pm2.length;g('rn').textContent=d.top.length;
+g('sn').textContent=d.services.length;g('rn').textContent=d.top.length;
 g('svc').innerHTML=d.services.map(s=>`<div class=row><code>:${s.port}</code><div class=tx><b>${s.name}</b><small>${s.via} · ${s.detail}</small></div><em class=${s.ok?'ok':'bad'}>${s.ok?'●':'○'}</em></div>`).join('');
 const h=location.hostname;
-g('web').innerHTML=d.web.map(w=>{const ok=w.url?d.sites?.[w.name]:d.services.find(s=>s.port==w.port)?.ok;
+const pm2Map=Object.fromEntries((d.pm2||[]).map(p=>[p.name,p]));
+const knownWeb=new Set();
+const items=(d.web||[]).map(w=>{
+knownWeb.add(w.name);
+const p=pm2Map[w.name]||null;
+const ok=w.url?d.sites?.[w.name]:(p?p.status==='online':d.services.find(s=>s.port==w.port)?.ok);
 const host=(w.host&&(h==='localhost'||h==='127.0.0.1'))?h:(w.host||h);
-const link=w.url||`http://${host}:${w.port}${w.path}`;
-const sub=w.url?w.url.replace('https://',''):`${host}:${w.port} · ${w.desc}`;
-return `<a class=wcard target=_blank rel="noreferrer noopener" href="${link}"><span class=dot style="background:${ok?'#3fb950':'#f85149'}"></span><div class=wt><b>${w.name}</b><small>${sub}</small></div><span class=arr>›</span></a>`}).join('');
-g('pm2').innerHTML=d.pm2.map(p=>`<div class=app><div class=at><b>${p.name}</b><em class=${p.status=='online'?'ok':'bad'}>${p.status}</em><span class=am><span>${p.cpu}</span><span>${p.mem}</span><span>up ${p.uptime}</span></span></div><div class=aa><button class=btn onclick="act('${p.name}','restart')">↻ restart</button>${p.status=='online'?`<button class="btn stop" onclick="act('${p.name}','stop')">■ stop</button>`:`<button class="btn start" onclick="act('${p.name}','start')">▶ start</button>`}</div></div>`).join('')||'<div class=list><div class=row>n/a</div></div>';
+const link=w.url||(w.port?`http://${host}:${w.port}${w.path||'/'}`:null);
+const sub=w.url?w.url.replace('https://',''):(w.port?`${host}:${w.port} · ${w.desc}`:(w.desc||''));
+return{name:w.name,link,sub,ok,pm2:p};
+});
+(d.pm2||[]).forEach(p=>{
+if(!knownWeb.has(p.name)){
+items.push({name:p.name,link:null,sub:`pm2 service · ${p.status}`,ok:p.status==='online',pm2:p});
+}
+});
+g('an').textContent=items.length;
+g('apps').innerHTML=items.map(it=>{
+const tit=it.link?`<a class=wtit target=_blank rel="noreferrer noopener" href="${it.link}"><span class="dot ${it.ok?'ok':'bad'}"></span><b>${it.name}</b><span class=arr>↗</span></a>`:`<div class=wtit><span class="dot ${it.ok?'ok':'bad'}"></span><b>${it.name}</b></div>`;
+const acts=it.pm2?`<div class=aa><button class=btn title="Restart ${it.pm2.name}" onclick="act('${it.pm2.name}','restart')">↻</button>${it.pm2.status=='online'?`<button class="btn stop" title="Stop ${it.pm2.name}" onclick="act('${it.pm2.name}','stop')">■</button>`:`<button class="btn start" title="Start ${it.pm2.name}" onclick="act('${it.pm2.name}','start')">▶</button>`}</div>`:'';
+const meta=it.pm2?`<span class=wam><span>${it.pm2.cpu}</span><span>${it.pm2.mem}</span><span>up ${it.pm2.uptime}</span></span>`:'';
+return `<div class=card-app><div class=wtop>${tit}${acts}</div><div class=wbot><span class=wsub>${it.sub}</span>${meta}</div></div>`;
+}).join('');
 g('ngx').innerHTML=d.nginx.map(n=>`<span class=chip>${n}</span>`).join('')||'<span class=chip>n/a</span>';g('nn').textContent=d.nginx.length;
 g('proc').innerHTML=d.top.map(p=>`<div class=row><code>${p.pid}</code><div class=tx><b>${p.name}</b></div><span class=mv>${p.mem}</span></div>`).join('');
 }catch(e){g('ts').textContent='offline';g('live').classList.add('off')}}setInterval(tick,3000);tick()
@@ -343,9 +359,11 @@ WEB = [{"port": 8080, "name": "link-shortener", "path": "/", "desc": "s.kemenkop
        {"port": 9090, "name": "adminer", "path": "/", "desc": "db admin"},
        {"port": 9091, "name": "cockpit", "path": "/", "desc": "server admin"},
        {"port": 20128, "name": "9router", "path": "/dashboard", "desc": "tunnel dash"},
-       {"port": 3080, "name": "dsh-web", "path": "/", "desc": "deepseek harness", "host": "127.0.0.1"},
-       {"port": 9119, "name": "hermes-dash", "path": "/", "desc": "hermes web ui"},
-       {"name": "sapa-web", "url": "https://sapa.kemenkopmk.go.id"}]
+       {"port": 3080, "name": "dsh-web", "path": "/", "desc": "deepseek harness"},
+       {"port": 9119, "name": "hermes-dashboard", "path": "/", "desc": "hermes web ui"},
+       {"port": 3000, "name": "sapa-server", "path": "/", "desc": "backend sapa"},
+       {"port": 8899, "name": "monitor", "path": "/", "desc": "server monitor"},
+       {"name": "sapa-web", "url": "https://sapa.kemenkopmk.go.id", "desc": "portal sapa"}]
 
 
 def site_ok(url):
