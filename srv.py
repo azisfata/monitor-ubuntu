@@ -169,8 +169,9 @@ content="width=device-width,initial-scale=1"><title>monitor</title><style>
 body{margin:0;background:radial-gradient(1200px 400px at 50% -100px,#162033,#0b0e14);color:#e6edf3;font:15px/1.45 system-ui,-apple-system,sans-serif;min-height:100vh}
 header{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:rgba(11,14,20,.88);backdrop-filter:blur(10px);border-bottom:1px solid #262d36}
 header b{font-size:16px}
-.h-right{display:flex;align-items:center;gap:10px}
-.net-badge{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:3px 8px;font-size:11.5px;color:#79c0ff;font-variant-numeric:tabular-nums;display:inline-flex;align-items:center;gap:6px}
+.h-right{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.h-badge{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:3px 8px;font-size:11.5px;color:#79c0ff;font-variant-numeric:tabular-nums;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.h-badge.dim{color:#8b949e}
 .live{display:flex;align-items:center;gap:7px;font-size:12px;color:#8b949e;font-variant-numeric:tabular-nums}
 .live i{width:9px;height:9px;border-radius:50%;background:#3fb950;animation:pl 2s infinite}
 @keyframes pl{50%{opacity:.35}}.live.off i{background:#f85149;animation:none}
@@ -238,7 +239,9 @@ footer{color:#484f58;font-size:12px;text-align:center;margin-top:26px}
 @media(min-width:900px){main{padding:6px 20px 40px}.grid{grid-template-columns:repeat(4,1fr)}.wgrid{grid-template-columns:repeat(3,1fr)}}
 </style></head><body><header><b>⚙️ server</b>
 <div class=h-right>
-<span class=net-badge id=net>↓ 0 KB/s · ↑ 0 KB/s</span>
+<span class=h-badge id=net>↓ 0 KB/s · ↑ 0 KB/s</span>
+<span class="h-badge dim" id=upt>up …</span>
+<span class="h-badge dim" id=swp>sw 0/4G</span>
 <span class=live id=live><i></i><span id=ts>…</span></span>
 <button class=lout onclick="logout()">keluar</button></div></header><main>
 <section><div class=grid id=sys></div></section>
@@ -277,14 +280,14 @@ return `<div class="card metric"><svg viewBox="0 0 100 58"><path d="M 12 50 A 38
 async function tick(){try{const d=await(await fetch('/api')).json();
 g('ts').textContent=d.time;g('live').classList.remove('off');g('h').textContent=location.hostname;
 if(d.net_rx&&d.net_tx)g('net').textContent=`↓ ${d.net_rx} · ↑ ${d.net_tx}`;
-const loadVal=parseFloat(d.load.split(' ')[0])||0;
-const loadPct=Math.min(100,Math.round((loadVal/(d.cores||4))*100));
 const uptimeStr=d.uptime.replace(/^0d\s*/,'').replace(/^0h\s*/,'')||d.uptime;
 const swapStr=d.swap_total_gb?`${d.swap_used_gb}/${d.swap_total_gb}G`:`${d.swap_used_gb||0}G`;
+if(g('upt'))g('upt').textContent=`up ${uptimeStr}`;
+if(g('swp'))g('swp').textContent=`sw ${swapStr}`;
+const loadVal=parseFloat(d.load.split(' ')[0])||0;
+const loadPct=Math.min(100,Math.round((loadVal/(d.cores||4))*100));
 g('sys').innerHTML=metric('cpu',d.cpu,d.cpu,'%')+metric('mem',d.mem_pct,d.mem_pct,'%')
-+metric('disk',d.disk_pct,d.disk_pct,'%')+metric('load',d.load.split(' ')[0],loadPct)
-+metric('net ↓',d.net_rx||'0 KB/s',null)+metric('net ↑',d.net_tx||'0 KB/s',null)
-+metric('uptime',uptimeStr,null)+metric('swap',swapStr,null);
++metric('disk',d.disk_pct,d.disk_pct,'%')+metric('load',d.load.split(' ')[0],loadPct);
 g('sn').textContent=d.services.length;g('rn').textContent=d.top.length;
 g('svc').innerHTML=d.services.map(s=>`<div class=row><code>:${s.port}</code><div class=tx><b>${s.name}</b><small>${s.via} · ${s.detail}</small></div><em class=${s.ok?'ok':'bad'}>${s.ok?'●':'○'}</em></div>`).join('');
 const h=location.hostname;

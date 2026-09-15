@@ -16,15 +16,11 @@
 
 ```text
  ┌─────────────────────────────────────────────────────────────────────────────┐
- │ ⚙️ server                       [↓ 12 KB/s · ↑ 170 KB/s]  ● LIVE  10:20:00  │
+ │ ⚙️ server     [↓ 12 KB/s · ↑ 170 KB/s] [up 1d 4h] [sw 0/4G]  ● LIVE 10:50:00│
  ├─────────────────────────────────────────────────────────────────────────────┤
  │   ╭──────────╮    ╭──────────╮    ╭──────────╮    ╭──────────╮              │
  │   │  14.2 %  │    │  31.0 %  │    │  18.7 %  │    │   1.25   │              │
  │   │   CPU    │    │   MEM    │    │   DISK   │    │   LOAD   │              │
- │   ╰──────────╯    ╰──────────╯    ╰──────────╯    ╰──────────╯              │
- │   ╭──────────╮    ╭──────────╮    ╭──────────╮    ╭──────────╮              │
- │   │ 12 KB/s  │    │ 170 KB/s │    │  1d 4h   │    │  0 / 4G  │              │
- │   │  NET ↓   │    │  NET ↑   │    │  UPTIME  │    │   SWAP   │              │
  │   ╰──────────╯    ╰──────────╯    ╰──────────╯    ╰──────────╯              │
  │                                                                             │
  │ ▶ APPS & PM2 SERVICES (7)                                                   │
@@ -45,7 +41,7 @@
 - 🪶 **Ultra-Ringan**: Hanya satu file Python tunggal (`srv.py`), konsumsi memori hanya **~8 MB RAM**, dan pemakaian CPU **< 0.01%**.
 - 📦 **Zero External Dependencies**: Tidak memerlukan `pip install`, tidak membutuhkan Redis/Database eksternal, hanya murni menggunakan modul bawaan Python (*Standard Library*).
 - ⚡ **Super Cepat & Responsif**: Backend asinkron/multithreaded dengan waktu respon API sub-milidetik (< 15ms) dan auto-refresh 3 detik.
-- 🎨 **Tampilan Modern & Dinamis**: Desain gelap (*dark theme*) elegan dengan SVG arc gauge, multi-tier capacity color palette, dan adaptif untuk Mobile, Tablet, serta Desktop.
+- 🎨 **Tampilan Modern & Dinamis**: Desain gelap (*dark theme*) elegan dengan 4 SVG arc gauges simetris di grid utama, badge header informatif, dan adaptif untuk Mobile, Tablet, serta Desktop.
 - 📱 **WhatsApp Alerting Built-in**: Peringatan otomatis langsung ke WhatsApp admin saat aplikasi PM2 bermasalah atau RAM/Disk kritis (>90%).
 
 ---
@@ -55,9 +51,11 @@
 ### 1. 📈 Real-Time Dynamic Metrics
 - **Dynamic Semi-Circle SVG Gauges**: Indikator melengkung halus untuk **CPU**, **RAM**, **DISK**, dan **LOAD** dengan pewarnaan dinamis 5-level:
   - 🟢 **Normal** ($<30\%$) $\rightarrow$ 🩵 **Rendah** ($30-54\%$) $\rightarrow$ 🟡 **Sedang** ($55-74\%$) $\rightarrow$ 🟠 **Tinggi** ($75-89\%$) $\rightarrow$ 🔴 **Kritis** ($\ge 90\%$)
-- **Live Network Bandwidth Gauge**: Kecepatan Download ($\downarrow$ RX) & Upload ($\uparrow$ TX) real-time dihitung dari delta `/proc/net/dev`.
-- **Swap Memory Detail**: Memantau kapasitas Swap terpakai vs total (`0/4G`).
-- **Live Status Pulse**: Indikator titik hijau berkedip real-time lengkap dengan waktu server.
+- **Header Info Badges (Sticky Navbar)**:
+  - **Live Network Bandwidth**: Kecepatan Download ($\downarrow$ RX) & Upload ($\uparrow$ TX) real-time dari delta `/proc/net/dev`.
+  - **Server Uptime**: Durasi server aktif (`up 1d 4h`).
+  - **Swap Memory Detail**: Kapasitas Swap terpakai vs total (`sw 0/4G`).
+  - **Live Status Pulse**: Indikator titik hijau berkedip real-time lengkap dengan waktu server.
 
 ### 2. 🚀 Unified Apps & PM2 Manager
 - Menyatukan daftar Web Portal dan PM2 Service dalam satu grid kartu interaktif.
