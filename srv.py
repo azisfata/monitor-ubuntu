@@ -85,9 +85,10 @@ details[open] summary h2::after{transform:rotate(90deg)}
 details[open] summary h2{margin-bottom:10px}
 h2{display:flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:#8b949e;margin:0 0 10px}
 .n{background:#21262d;border-radius:99px;padding:1px 9px;font-size:11px;letter-spacing:0}
-.grid{display:grid;gap:10px;grid-template-columns:repeat(2,1fr)}
-.card.metric{background:linear-gradient(180deg,#171c26,#12161e);border:1px solid #262d36;border-radius:14px;padding:8px 6px 6px;display:flex;align-items:center;justify-content:center}
+.card.metric{background:linear-gradient(180deg,#171c26,#12161e);border:1px solid #262d36;border-radius:14px;padding:8px 6px 6px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:76px}
 .card.metric svg{width:100%;max-width:130px;height:auto;display:block}
+.card.metric .sv{font-size:17px;font-weight:700;color:#e6edf3;font-variant-numeric:tabular-nums;margin-bottom:3px}
+.card.metric .sl{font-size:9.5px;color:#8b949e;letter-spacing:.08em;font-weight:500;text-transform:uppercase}
 .wgrid{display:grid;gap:10px;grid-template-columns:1fr}
 .card-app{background:linear-gradient(180deg,#171c26,#12161e);border:1px solid #262d36;border-radius:14px;padding:11px 13px;display:flex;flex-direction:column;justify-content:space-between;gap:8px;min-height:72px}
 .wtop{display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -136,12 +137,15 @@ footer{color:#484f58;font-size:12px;text-align:center;margin-top:26px}
 <script>
 const g=id=>document.getElementById(id);
 function metric(l,v,p,unit){
-const pct=p!=null?Math.min(100,Math.max(0,p)):0;
+const valStr=`${v}${unit||''}`;
+if(p==null){
+return `<div class="card metric"><span class=sv>${valStr}</span><span class=sl>${l.toUpperCase()}</span></div>`;
+}
+const pct=Math.min(100,Math.max(0,p));
 const off=(119.4*(1-pct/100)).toFixed(1);
 const clr=pct>=85?'#f85149':pct>=65?'#d29922':'#3fb950';
-const valStr=`${v}${unit||''}`;
 const fz=valStr.length>7?'10.5px':valStr.length>5?'12.5px':'14.5px';
-const arc=p!=null?`<path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="${clr}" stroke-width="6.5" stroke-linecap="round" stroke-dasharray="119.4" stroke-dashoffset="${off}" style="transition:stroke-dashoffset .5s ease,stroke .5s"/>`:'';
+const arc=`<path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="${clr}" stroke-width="6.5" stroke-linecap="round" stroke-dasharray="119.4" stroke-dashoffset="${off}" style="transition:stroke-dashoffset .5s ease,stroke .5s"/>`;
 return `<div class="card metric"><svg viewBox="0 0 100 58"><path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="#212733" stroke-width="6.5" stroke-linecap="round"/>${arc}<text x="50" y="37" text-anchor="middle" fill="#e6edf3" font-size="${fz}" font-weight="700" font-family="system-ui,-apple-system,sans-serif">${valStr}</text><text x="50" y="52" text-anchor="middle" fill="#8b949e" font-size="9px" letter-spacing="0.08em" font-family="system-ui,-apple-system,sans-serif">${l.toUpperCase()}</text></svg></div>`}
 async function tick(){try{const d=await(await fetch('/api')).json();
 g('ts').textContent=d.time;g('live').classList.remove('off');g('h').textContent=location.hostname;
