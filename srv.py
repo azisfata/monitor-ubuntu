@@ -322,7 +322,7 @@ g('apps').innerHTML=items.map(it=>{
 const dotClass=it.restarting?'dot restarting':(it.ok?'dot ok':'dot bad');
 const tit=it.link?`<a class=wtit target=_blank rel="noreferrer noopener" href="${it.link}"><span class="${dotClass}"></span><b>${it.name}</b><span class=arr>↗</span></a>`:`<div class=wtit><span class="${dotClass}"></span><b>${it.name}</b></div>`;
 const acts=it.pm2?`<div class=aa><button class=btn title="Lihat Log" onclick="showLog('${it.pm2.name}')">📄 log</button><button class=btn title="Restart ${it.pm2.name}" onclick="act('${it.pm2.name}','restart')">↻</button>${it.pm2.status=='online'?`<button class="btn stop" title="Stop ${it.pm2.name}" onclick="act('${it.pm2.name}','stop')">■</button>`:`<button class="btn start" title="Start ${it.pm2.name}" onclick="act('${it.pm2.name}','start')">▶</button>`}</div>`:'';
-const stateLabel=it.restarting?'restarting...':(!it.ok&&it.pm2?(it.pm2.status==='online'?'starting...':it.pm2.status):'up '+it.pm2.uptime);
+const stateLabel=it.restarting?'restarting...':(it.pm2?(!it.ok?(it.pm2.status==='online'?'starting...':it.pm2.status):'up '+it.pm2.uptime):'');
 const meta=it.pm2?`<span class=wam><span>${it.pm2.cpu}</span><span>${it.pm2.mem}</span><span>${stateLabel}</span></span>`:'';
 return `<div class=card-app><div class=wtop>${tit}${acts}</div><div class=wbot><span class=wsub>${it.sub}</span>${meta}</div></div>`;
 }).join('');
@@ -332,7 +332,7 @@ g('doc').innerHTML=(d.docker||[]).map(c=>`<span class="chip ${c.ok?'ok':'bad'}">
 g('dn').textContent=(d.docker||[]).length;
 g('sd').innerHTML=(d.systemd||[]).map(s=>`<span class="chip ${s.ok?'ok':'bad'}"><span class="dot ${s.ok?'ok':'bad'}"></span>${s.name} <small>(${s.status})</small></span>`).join('')||'<span class=chip>n/a</span>';
 g('sdn').textContent=(d.systemd||[]).length;
-}catch(e){g('ts').textContent='offline';g('live').classList.add('off')}}setInterval(tick,3000);tick()
+}catch(e){console.error('tick error:',e);g('ts').textContent='offline';g('live').classList.add('off')}}setInterval(tick,3000);tick()
 async function act(name,op){if(op!='start'&&!confirm(`${op} ${name}?`))return;
 _restarting[name]=true;tick();
 try{
