@@ -545,11 +545,29 @@ def nginx():
     try:
         vhosts = []
         d = "/etc/nginx/sites-enabled"
+        if not os.path.isdir(d):
+            return []
         for fn in sorted(os.listdir(d)):
-            with open(os.path.join(d, fn)) as f:
-                names = [w.strip(";") for line in f for w in
-                         (line.strip().split()[1:] if line.strip().startswith("server_name") else [])]
-            vhosts.append(f"{fn} ({', '.join(names) or '?'})")
+            fp = os.path.join(d, fn)
+            if not os.path.isfile(fp):
+                continue
+            names = []
+            with open(fp) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("server_name") and not line.startswith("#"):
+                        parts = [w.strip(";") for w in line.split()[1:] if w.strip(";")]
+                        for p in parts:
+                            if p not in names:
+                                names.append(p)
+            if not names:
+                vhosts.append(fn)
+            elif len(names) == 1 and names[0] == fn:
+                vhosts.append(fn)
+            elif fn == "default" and names == ["_"]:
+                vhosts.append("default (_)")
+            else:
+                vhosts.append(f"{fn} ({', '.join(names)})" if fn not in names else ", ".join(names))
         return vhosts
     except Exception:
         return []
