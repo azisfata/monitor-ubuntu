@@ -86,12 +86,8 @@ details[open] summary h2{margin-bottom:10px}
 h2{display:flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:#8b949e;margin:0 0 10px}
 .n{background:#21262d;border-radius:99px;padding:1px 9px;font-size:11px;letter-spacing:0}
 .grid{display:grid;gap:10px;grid-template-columns:repeat(2,1fr)}
-.card{background:linear-gradient(180deg,#171c26,#12161e);border:1px solid #262d36;border-radius:14px;padding:12px}
-.metric span{font-size:10.5px;color:#8b949e;text-transform:uppercase;letter-spacing:.06em}
-.metric b{display:block;font-size:21px;margin:1px 0 7px;font-variant-numeric:tabular-nums}
-.bar{height:6px;background:#262d36;border-radius:99px;overflow:hidden}
-.bar i{display:block;height:100%;border-radius:99px;background:#3fb950}
-.bar i.y{background:#d29922}.bar i.r{background:#f85149}
+.card.metric{background:linear-gradient(180deg,#171c26,#12161e);border:1px solid #262d36;border-radius:14px;padding:8px 6px 6px;display:flex;align-items:center;justify-content:center}
+.card.metric svg{width:100%;max-width:130px;height:auto;display:block}
 .wgrid{display:grid;gap:10px;grid-template-columns:1fr}
 .card-app{background:linear-gradient(180deg,#171c26,#12161e);border:1px solid #262d36;border-radius:14px;padding:11px 13px;display:flex;flex-direction:column;justify-content:space-between;gap:8px;min-height:72px}
 .wtop{display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -139,12 +135,21 @@ footer{color:#484f58;font-size:12px;text-align:center;margin-top:26px}
 <footer>auto-refresh 3s · <span id=h></span></footer></main>
 <script>
 const g=id=>document.getElementById(id);
-function tone(p){return p>=85?'r':p>=65?'y':''}
-function metric(l,v,p,unit){return `<div class="card metric"><span>${l}</span><b>${v}${unit||''}</b>`+(p==null?'':`<div class=bar><i class=${tone(p)} style="width:${p}%"></i></div>`)+'</div>'}
+function metric(l,v,p,unit){
+const pct=p!=null?Math.min(100,Math.max(0,p)):0;
+const off=(119.4*(1-pct/100)).toFixed(1);
+const clr=pct>=85?'#f85149':pct>=65?'#d29922':'#3fb950';
+const valStr=`${v}${unit||''}`;
+const fz=valStr.length>7?'10.5px':valStr.length>5?'12.5px':'14.5px';
+const arc=p!=null?`<path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="${clr}" stroke-width="6.5" stroke-linecap="round" stroke-dasharray="119.4" stroke-dashoffset="${off}" style="transition:stroke-dashoffset .5s ease,stroke .5s"/>`:'';
+return `<div class="card metric"><svg viewBox="0 0 100 58"><path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="#212733" stroke-width="6.5" stroke-linecap="round"/>${arc}<text x="50" y="37" text-anchor="middle" fill="#e6edf3" font-size="${fz}" font-weight="700" font-family="system-ui,-apple-system,sans-serif">${valStr}</text><text x="50" y="52" text-anchor="middle" fill="#8b949e" font-size="9px" letter-spacing="0.08em" font-family="system-ui,-apple-system,sans-serif">${l.toUpperCase()}</text></svg></div>`}
 async function tick(){try{const d=await(await fetch('/api')).json();
 g('ts').textContent=d.time;g('live').classList.remove('off');g('h').textContent=location.hostname;
+const loadVal=parseFloat(d.load.split(' ')[0])||0;
+const loadPct=Math.min(100,Math.round(loadVal*50));
+const uptimeStr=d.uptime.replace(/^0d\\s*/,'');
 g('sys').innerHTML=metric('cpu',d.cpu,d.cpu,'%')+metric('mem',d.mem_pct,d.mem_pct,'%')
-+metric('disk',d.disk_pct,d.disk_pct,'%')+metric('load',d.load.split(' ')[0])+metric('uptime',d.uptime)+metric('procs',d.nproc);
++metric('disk',d.disk_pct,d.disk_pct,'%')+metric('load',d.load.split(' ')[0],loadPct)+metric('uptime',uptimeStr,null)+metric('procs',d.nproc,null);
 g('sn').textContent=d.services.length;g('rn').textContent=d.top.length;
 g('svc').innerHTML=d.services.map(s=>`<div class=row><code>:${s.port}</code><div class=tx><b>${s.name}</b><small>${s.via} · ${s.detail}</small></div><em class=${s.ok?'ok':'bad'}>${s.ok?'●':'○'}</em></div>`).join('');
 const h=location.hostname;
