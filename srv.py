@@ -65,6 +65,7 @@ KNOWN = {22: "ssh", 53: "dns", 80: "nginx", 443: "nginx", 3000: "sapa-server",
 HIDE = {20241}  # port internal dinamis, disembunyikan (cek ulang bila ganti reboot)
 _prev_cpu = None
 _BIND = {}  # port -> host, diisi listeners() dari alamat bind ss
+_PORT_NAMES = {}  # port -> dynamic process name, diisi listeners() dari ss -tlnpH
 
 PAGE = """<!doctype html><html><head><meta charset=utf-8><meta name=viewport
 content="width=device-width,initial-scale=1"><title>monitor</title><style>
@@ -237,22 +238,38 @@ def mem():
     return d
 
 
-def listeners():
+def listeners(pm2_map=None):
     try:
-        out = subprocess.run(["ss", "-tlnH"], capture_output=True, text=True, timeout=5).stdout
+        out = subprocess.run(["ss", "-tlnpH"], capture_output=True, text=True, timeout=5).stdout
         ports = set()
         _BIND.clear()
+        _PORT_NAMES.clear()
         for line in out.splitlines():
-            addr = line.split()[3]
-            ip, port = addr.rsplit(":", 1)
-            port = int(port)
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            addr = parts[3]
+            ip, port_str = addr.rsplit(":", 1)
+            try:
+                port = int(port_str)
+            except ValueError:
+                continue
             ports.add(port)
             h = ip.strip("[]")
             if h in ("0.0.0.0", "*", "::"):
                 h = "127.0.0.1"
-            _BIND.setdefault(port, h)  # utamakan 127.0.0.1 / entri spesifik
+            _BIND.setdefault(port, h)
             if h == "127.0.0.1":
                 _BIND[port] = h
+            m_pid = re.search(r'pid=(\d+)', line)
+            m_proc = re.search(r'users:\(\("([^"]+)"', line)
+            p_name = None
+            if m_pid and pm2_map and m_pid.group(1) in pm2_map:
+                p_name = pm2_map[m_pid.group(1)]
+            elif m_proc:
+                p_name = m_proc.group(1).split()[0].replace('"', '')
+            if p_name and port not in _PORT_NAMES:
+                _PORT_NAMES[port] = p_name
         # buang port ephemeral (>32768) yg tak dikenal + HIDE: itu koneksi sementara, bukan servis
         return sorted(p for p in ports if p in KNOWN or (p < 32768 and p not in HIDE))
     except Exception:
@@ -288,14 +305,16 @@ def check_tcp(port):
 
 
 def check_one(port):
+    name = KNOWN.get(port) or _PORT_NAMES.get(port) or f"port-{port}"
     if port == 443:
         ok, d = check_http(port, https=True)
-        return {"port": port, "name": KNOWN.get(port, "?"), "via": "https", "ok": ok, "detail": d}
-    if port in (80, 3000, 3080, 3105, 8080, 9090, 9091, 9119):
-        ok, d = check_http(port)
-        return {"port": port, "name": KNOWN.get(port, "?"), "via": "http", "ok": ok, "detail": d}
-    ok, d = check_tcp(port)
-    return {"port": port, "name": KNOWN.get(port, "?"), "via": "tcp", "ok": ok, "detail": d}
+        return {"port": port, "name": name, "via": "https", "ok": ok, "detail": d}
+    # Coba HTTP jika port web atau coba HTTP auto-probe
+    ok_http, d_http = check_http(port)
+    if ok_http:
+        return {"port": port, "name": name, "via": "http", "ok": True, "detail": d_http}
+    ok_tcp, d_tcp = check_tcp(port)
+    return {"port": port, "name": name, "via": "tcp", "ok": ok_tcp, "detail": d_tcp}
 
 
 def pm2():
@@ -429,7 +448,8 @@ def snapshot():
         load = " ".join(f.read().split()[:3])
     with open("/proc/uptime") as f:
         s = int(float(f.read().split()[0]))
-    ports = listeners()
+    pm2_rows, pm2_map = pm2()
+    ports = listeners(pm2_map)
     with cf.ThreadPoolExecutor(max_workers=16) as ex:
         svcs = list(ex.map(check_one, ports))
         sites = {w["name"]: ex.submit(site_ok, w["url"]).result()
@@ -441,7 +461,6 @@ def snapshot():
         if item.get("name") == "dsh-web" and tok:
             item["path"] = f"/?token={tok}"
         web_list.append(item)
-    pm2_rows, pm2_map = pm2()
     return {"time": time.strftime("%H:%M:%S"),
             "cpu": cpu_pct(), "mem_pct": round(100 * used / m["MemTotal"], 1),
             "disk_pct": round(100 * du.used / du.total, 1), "load": load, "cores": os.cpu_count() or 1,
