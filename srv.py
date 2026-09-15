@@ -85,6 +85,7 @@ details[open] summary h2::after{transform:rotate(90deg)}
 details[open] summary h2{margin-bottom:10px}
 h2{display:flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:#8b949e;margin:0 0 10px}
 .n{background:#21262d;border-radius:99px;padding:1px 9px;font-size:11px;letter-spacing:0}
+.grid{display:grid;gap:10px;grid-template-columns:repeat(2,1fr)}
 .card.metric{background:linear-gradient(180deg,#171c26,#12161e);border:1px solid #262d36;border-radius:14px;padding:8px 6px 6px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:76px}
 .card.metric svg{width:100%;max-width:130px;height:auto;display:block}
 .card.metric .sv{font-size:17px;font-weight:700;color:#e6edf3;font-variant-numeric:tabular-nums;margin-bottom:3px}
