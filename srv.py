@@ -196,8 +196,10 @@ h2{display:flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.09em;t
 .wtit:hover b{color:#58a6ff}
 .wtit b{font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wtit .arr{color:#8b949e;font-size:13px;opacity:0.7}
-.dot{width:8px;height:8px;flex:none;border-radius:50%}
-.dot.ok{background:#3fb950}.dot.bad{background:#f85149}
+.dot{width:8px;height:8px;flex:none;border-radius:50%;transition:background .3s}
+.dot.ok{background:#3fb950;box-shadow:0 0 6px rgba(63,185,80,.5)}
+.dot.bad{background:#f85149;box-shadow:0 0 6px rgba(248,81,73,.5)}
+.dot.restarting{background:#f0883e;animation:pl .8s infinite}
 .wbot{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:11.5px;color:#8b949e}
 .wsub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .wam{display:inline-flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums;color:#8b949e;background:#161b22;border:1px solid #21262d;border-radius:6px;padding:2px 6px;font-size:11px}
@@ -253,6 +255,7 @@ footer{color:#484f58;font-size:12px;text-align:center;margin-top:26px}
 <script>
 const g=id=>document.getElementById(id);
 let curLogApp=null;
+let _restarting={};
 function clr(pct){
 if(pct>=90)return'#f85149';
 if(pct>=75)return'#f0883e';
@@ -290,22 +293,37 @@ const knownWeb=new Set();
 const items=(d.web||[]).map(w=>{
 knownWeb.add(w.name);
 const p=pm2Map[w.name]||null;
-const ok=w.url?d.sites?.[w.name]:(p?p.status==='online':d.services.find(s=>s.port==w.port)?.ok);
+const svc=w.port?(d.services||[]).find(s=>s.port==w.port):null;
+let ok=false;
+if(w.url){
+ok=!!d.sites?.[w.name];
+}else if(p&&svc){
+ok=(p.status==='online')&&!!svc.ok;
+}else if(p){
+ok=(p.status==='online');
+}else if(svc){
+ok=!!svc.ok;
+}
+if(_restarting[w.name])ok=false;
 const host=w.host||h;
 const link=w.url||(w.port?`http://${host}:${w.port}${w.path||'/'}`:null);
 const sub=w.url?w.url.replace('https://',''):(w.port?`${host}:${w.port} · ${w.desc}`:(w.desc||''));
-return{name:w.name,link,sub,ok,pm2:p};
+return{name:w.name,link,sub,ok,pm2:p,restarting:!!_restarting[w.name]};
 });
 (d.pm2||[]).forEach(p=>{
 if(!knownWeb.has(p.name)){
-items.push({name:p.name,link:null,sub:`pm2 service · ${p.status}`,ok:p.status==='online',pm2:p});
+let ok=(p.status==='online');
+if(_restarting[p.name])ok=false;
+items.push({name:p.name,link:null,sub:`pm2 service · ${p.status}`,ok,pm2:p,restarting:!!_restarting[p.name]});
 }
 });
 g('an').textContent=items.length;
 g('apps').innerHTML=items.map(it=>{
-const tit=it.link?`<a class=wtit target=_blank rel="noreferrer noopener" href="${it.link}"><span class="dot ${it.ok?'ok':'bad'}"></span><b>${it.name}</b><span class=arr>↗</span></a>`:`<div class=wtit><span class="dot ${it.ok?'ok':'bad'}"></span><b>${it.name}</b></div>`;
+const dotClass=it.restarting?'dot restarting':(it.ok?'dot ok':'dot bad');
+const tit=it.link?`<a class=wtit target=_blank rel="noreferrer noopener" href="${it.link}"><span class="${dotClass}"></span><b>${it.name}</b><span class=arr>↗</span></a>`:`<div class=wtit><span class="${dotClass}"></span><b>${it.name}</b></div>`;
 const acts=it.pm2?`<div class=aa><button class=btn title="Lihat Log" onclick="showLog('${it.pm2.name}')">📄 log</button><button class=btn title="Restart ${it.pm2.name}" onclick="act('${it.pm2.name}','restart')">↻</button>${it.pm2.status=='online'?`<button class="btn stop" title="Stop ${it.pm2.name}" onclick="act('${it.pm2.name}','stop')">■</button>`:`<button class="btn start" title="Start ${it.pm2.name}" onclick="act('${it.pm2.name}','start')">▶</button>`}</div>`:'';
-const meta=it.pm2?`<span class=wam><span>${it.pm2.cpu}</span><span>${it.pm2.mem}</span><span>up ${it.pm2.uptime}</span></span>`:'';
+const stateLabel=it.restarting?'restarting...':(!it.ok&&it.pm2?(it.pm2.status==='online'?'starting...':it.pm2.status):'up '+it.pm2.uptime);
+const meta=it.pm2?`<span class=wam><span>${it.pm2.cpu}</span><span>${it.pm2.mem}</span><span>${stateLabel}</span></span>`:'';
 return `<div class=card-app><div class=wtop>${tit}${acts}</div><div class=wbot><span class=wsub>${it.sub}</span>${meta}</div></div>`;
 }).join('');
 g('ngx').innerHTML=d.nginx.map(n=>`<span class=chip>${n}</span>`).join('')||'<span class=chip>n/a</span>';g('nn').textContent=d.nginx.length;
@@ -316,9 +334,16 @@ g('sd').innerHTML=(d.systemd||[]).map(s=>`<span class="chip ${s.ok?'ok':'bad'}">
 g('sdn').textContent=(d.systemd||[]).length;
 }catch(e){g('ts').textContent='offline';g('live').classList.add('off')}}setInterval(tick,3000);tick()
 async function act(name,op){if(op!='start'&&!confirm(`${op} ${name}?`))return;
+_restarting[name]=true;tick();
+try{
 const r=await fetch('/act',{method:'POST',body:JSON.stringify({name,op})});
 if(r.status==401){location.href='/login';return}
-alert(r.ok?`${op} ${name} ok`:'gagal: '+await r.text());tick()}
+if(!r.ok)alert('gagal: '+await r.text());
+}catch(e){alert('error: '+e)}
+finally{delete _restarting[name]}
+tick();
+let n=0;
+const fastPoll=setInterval(()=>{n++;tick();if(n>=20)clearInterval(fastPoll)},1000);}
 async function showLog(name){
 curLogApp=name;
 g('m-title').textContent=`📋 Logs: ${name}`;
