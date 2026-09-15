@@ -137,6 +137,13 @@ footer{color:#484f58;font-size:12px;text-align:center;margin-top:26px}
 <footer>auto-refresh 3s · <span id=h></span></footer></main>
 <script>
 const g=id=>document.getElementById(id);
+function clr(pct){
+if(pct>=90)return'#f85149';
+if(pct>=75)return'#f0883e';
+if(pct>=55)return'#e3b341';
+if(pct>=30)return'#38d39f';
+return'#3fb950';
+}
 function metric(l,v,p,unit){
 const valStr=`${v}${unit||''}`;
 if(p==null){
@@ -144,9 +151,9 @@ return `<div class="card metric"><span class=sv>${valStr}</span><span class=sl>$
 }
 const pct=Math.min(100,Math.max(0,p));
 const off=(119.4*(1-pct/100)).toFixed(1);
-const clr=pct>=85?'#f85149':pct>=65?'#d29922':'#3fb950';
+const c=clr(pct);
 const fz=valStr.length>7?'10.5px':valStr.length>5?'12.5px':'14.5px';
-const arc=`<path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="${clr}" stroke-width="6.5" stroke-linecap="round" stroke-dasharray="119.4" stroke-dashoffset="${off}" style="transition:stroke-dashoffset .5s ease,stroke .5s"/>`;
+const arc=`<path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="${c}" stroke-width="6.5" stroke-linecap="round" stroke-dasharray="119.4" stroke-dashoffset="${off}" style="transition:stroke-dashoffset .5s ease,stroke .5s"/>`;
 return `<div class="card metric"><svg viewBox="0 0 100 58"><path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="#212733" stroke-width="6.5" stroke-linecap="round"/>${arc}<text x="50" y="37" text-anchor="middle" fill="#e6edf3" font-size="${fz}" font-weight="700" font-family="system-ui,-apple-system,sans-serif">${valStr}</text><text x="50" y="52" text-anchor="middle" fill="#8b949e" font-size="9px" letter-spacing="0.08em" font-family="system-ui,-apple-system,sans-serif">${l.toUpperCase()}</text></svg></div>`}
 async function tick(){try{const d=await(await fetch('/api')).json();
 g('ts').textContent=d.time;g('live').classList.remove('off');g('h').textContent=location.hostname;
