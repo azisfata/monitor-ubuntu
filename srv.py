@@ -152,7 +152,7 @@ async function tick(){try{const d=await(await fetch('/api')).json();
 g('ts').textContent=d.time;g('live').classList.remove('off');g('h').textContent=location.hostname;
 const loadVal=parseFloat(d.load.split(' ')[0])||0;
 const loadPct=Math.min(100,Math.round((loadVal/(d.cores||4))*100));
-const uptimeStr=d.uptime.replace(/^0d\\s*/,'');
+const uptimeStr=d.uptime.replace(/^0d\\s*/,'').replace(/^0h\\s*/,'')||d.uptime;
 g('sys').innerHTML=metric('cpu',d.cpu,d.cpu,'%')+metric('mem',d.mem_pct,d.mem_pct,'%')
 +metric('disk',d.disk_pct,d.disk_pct,'%')+metric('load',d.load.split(' ')[0],loadPct)+metric('uptime',uptimeStr,null)+metric('procs',d.nproc,null);
 g('sn').textContent=d.services.length;g('rn').textContent=d.top.length;
