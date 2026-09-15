@@ -163,7 +163,7 @@ WEB = [{"port": 8080, "name": "link-shortener", "path": "/", "desc": "s.kemenkop
        {"port": 8899, "name": "monitor", "path": "/", "desc": "server monitor"},
        {"name": "sapa-web", "url": "https://sapa.kemenkopmk.go.id", "desc": "portal sapa"}]
 
-PAGE = """<!doctype html><html><head><meta charset=utf-8><meta name=viewport
+PAGE = r"""<!doctype html><html><head><meta charset=utf-8><meta name=viewport
 content="width=device-width,initial-scale=1"><title>monitor</title><style>
 *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
 body{margin:0;background:radial-gradient(1200px 400px at 50% -100px,#162033,#0b0e14);color:#e6edf3;font:15px/1.45 system-ui,-apple-system,sans-serif;min-height:100vh}
@@ -232,8 +232,8 @@ footer{color:#484f58;font-size:12px;text-align:center;margin-top:26px}
 .login button{width:100%;background:#238636;border:0;color:#fff;border-radius:10px;padding:12px;font-size:15px;min-height:48px;cursor:pointer}
 .login .err{color:#f85149;font-size:13px;min-height:20px;margin-bottom:6px}
 .lout{background:none;border:1px solid #30363d;color:#8b949e;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer}
-@media(min-width:600px){.grid{grid-template-columns:repeat(3,1fr)}.wgrid{grid-template-columns:repeat(2,1fr)}}
-@media(min-width:900px){main{padding:6px 20px 40px}.grid{grid-template-columns:repeat(6,1fr)}.wgrid{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:600px){.grid{grid-template-columns:repeat(4,1fr)}.wgrid{grid-template-columns:repeat(2,1fr)}}
+@media(min-width:900px){main{padding:6px 20px 40px}.grid{grid-template-columns:repeat(4,1fr)}.wgrid{grid-template-columns:repeat(3,1fr)}}
 </style></head><body><header><b>⚙️ server</b>
 <div class=h-right>
 <span class=net-badge id=net>↓ 0 KB/s · ↑ 0 KB/s</span>
@@ -276,10 +276,12 @@ g('ts').textContent=d.time;g('live').classList.remove('off');g('h').textContent=
 if(d.net_rx&&d.net_tx)g('net').textContent=`↓ ${d.net_rx} · ↑ ${d.net_tx}`;
 const loadVal=parseFloat(d.load.split(' ')[0])||0;
 const loadPct=Math.min(100,Math.round((loadVal/(d.cores||4))*100));
-const uptimeStr=d.uptime.replace(/^0d\\s*/,'').replace(/^0h\\s*/,'')||d.uptime;
+const uptimeStr=d.uptime.replace(/^0d\s*/,'').replace(/^0h\s*/,'')||d.uptime;
 const swapStr=d.swap_used_gb?`${d.swap_used_gb}G`:'0G';
 g('sys').innerHTML=metric('cpu',d.cpu,d.cpu,'%')+metric('mem',d.mem_pct,d.mem_pct,'%')
-+metric('disk',d.disk_pct,d.disk_pct,'%')+metric('load',d.load.split(' ')[0],loadPct)+metric('uptime',uptimeStr,null)+metric('swap',swapStr,null);
++metric('disk',d.disk_pct,d.disk_pct,'%')+metric('load',d.load.split(' ')[0],loadPct)
++metric('net ↓',d.net_rx||'0 KB/s',null)+metric('net ↑',d.net_tx||'0 KB/s',null)
++metric('uptime',uptimeStr,null)+metric('swap',swapStr,null);
 g('sn').textContent=d.services.length;g('rn').textContent=d.top.length;
 g('svc').innerHTML=d.services.map(s=>`<div class=row><code>:${s.port}</code><div class=tx><b>${s.name}</b><small>${s.via} · ${s.detail}</small></div><em class=${s.ok?'ok':'bad'}>${s.ok?'●':'○'}</em></div>`).join('');
 const h=location.hostname;
