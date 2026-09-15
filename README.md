@@ -77,11 +77,11 @@
 - **Top Memory Processes**: Pelacakan 8 proses teratas pemakan RAM dari `/proc/*/status` dengan resolusi nama aplikasi otomatis.
 
 ### 6. 🔔 WhatsApp Background Alert Notifier
-- Daemon background ringan yang mengecek kesehatan server tiap 60 detik.
+- Daemon background ultra-ringan yang mengecek kesehatan server secara berkala tiap **5 menit**.
 - Mengirim pesan WhatsApp instan via Hermes Bridge jika:
   - Ada aplikasi PM2 berstatus `errored` atau `stopped`.
   - Pemakaian RAM fisik atau Disk melebihi **90%**.
-- **Fitur Anti-Spam Cooldown**: Jeda peringatan 30 menit per insiden + notifikasi **Recovery** otomatis saat server pulih kembali.
+- **Fitur Anti-Spam Cooldown**: Jeda peringatan **1 jam** per insiden + notifikasi **Recovery** otomatis saat server pulih kembali.
 
 ---
 
@@ -114,8 +114,8 @@ flowchart TD
     AUTH --> PROC
     AUTH --> SS
     AUTH --> PM2
-    ALERT -->|Cek Status Tiap 60s| PROC
-    ALERT -->|Cek App Tiap 60s| PM2
+    ALERT -->|Cek Status Tiap 5m| PROC
+    ALERT -->|Cek App Tiap 5m| PM2
     ALERT -->|Kirim Peringatan| BRIDGE
     BRIDGE --> ADMIN
 ```
@@ -160,6 +160,8 @@ Semua pengaturan bersifat opsional dengan nilai bawaan yang siap pakai:
 | `MONITOR_PASS` | *String* | `1232` | Password login dashboard |
 | `MONITOR_TOKEN` | *String* | `.token` file / fallback | Secret key untuk penandatanganan cookie sesi HMAC |
 | `MONITOR_WA_ADMIN` | *String* | Auto dari `.env` Hermes | Nomor tujuan notifikasi WhatsApp (format: `6281335004509`) |
+| `MONITOR_ALERT_INTERVAL` | *Integer* | `300` | Interval pengecekan background dalam detik (default: 5 menit) |
+| `MONITOR_ALERT_COOLDOWN` | *Integer* | `3600` | Jeda anti-spam pengiriman ulang alert dalam detik (default: 1 jam) |
 
 ---
 

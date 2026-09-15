@@ -54,6 +54,8 @@ def _load_wa_admin():
 
 
 _WA_ADMIN = _load_wa_admin()
+ALERT_INTERVAL = int(os.environ.get("MONITOR_ALERT_INTERVAL", 300))  # Pengecekan tiap 5 menit
+ALERT_COOLDOWN = int(os.environ.get("MONITOR_ALERT_COOLDOWN", 3600))  # Jeda cooldown 1 jam
 _alert_cooldown = {}
 _prev_pm2_states = {}
 
@@ -76,7 +78,7 @@ def send_wa_alert(message):
 
 def alert_worker():
     global _prev_pm2_states
-    time.sleep(15)  # delay saat start
+    time.sleep(30)  # delay saat start
     while True:
         try:
             # 1. Cek status PM2 apps
@@ -90,7 +92,7 @@ def alert_worker():
                     prev_st = _prev_pm2_states.get(name)
                     now_ts = time.time()
                     if prev_st == "online" and st in ("errored", "stopped"):
-                        if now_ts - _alert_cooldown.get(f"pm2_{name}", 0) > 1800:
+                        if now_ts - _alert_cooldown.get(f"pm2_{name}", 0) > ALERT_COOLDOWN:
                             send_wa_alert(f"🚨 *PM2 App Error!*\nAplikasi `{name}` berubah status dari *online* menjadi *{st}*.")
                             _alert_cooldown[f"pm2_{name}"] = now_ts
                     elif prev_st in ("errored", "stopped") and st == "online":
@@ -103,18 +105,18 @@ def alert_worker():
             if m.get("MemTotal"):
                 used_pct = round(100 * (m["MemTotal"] - m.get("MemAvailable", m["MemTotal"])) / m["MemTotal"], 1)
                 now_ts = time.time()
-                if used_pct >= 90 and now_ts - _alert_cooldown.get("ram_high", 0) > 1800:
+                if used_pct >= 90 and now_ts - _alert_cooldown.get("ram_high", 0) > ALERT_COOLDOWN:
                     send_wa_alert(f"🚨 *RAM Kritis!*\nPemakaian RAM mencapai *{used_pct}%*.")
                     _alert_cooldown["ram_high"] = now_ts
             du = shutil.disk_usage("/")
             disk_pct = round(100 * du.used / du.total, 1)
             now_ts = time.time()
-            if disk_pct >= 90 and now_ts - _alert_cooldown.get("disk_high", 0) > 1800:
+            if disk_pct >= 90 and now_ts - _alert_cooldown.get("disk_high", 0) > ALERT_COOLDOWN:
                 send_wa_alert(f"🚨 *Disk Storage Kritis!*\nPartisi root `/` mencapai *{disk_pct}%*.")
                 _alert_cooldown["disk_high"] = now_ts
         except Exception:
             pass
-        time.sleep(60)
+        time.sleep(ALERT_INTERVAL)
 
 
 def new_sid(user="fata"):
