@@ -188,10 +188,11 @@ details[open] summary h2{margin-bottom:10px}
 h2{display:flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:#8b949e;margin:0 0 10px}
 .n{background:#21262d;border-radius:99px;padding:1px 9px;font-size:11px;letter-spacing:0}
 .grid{display:grid;gap:10px;grid-template-columns:repeat(2,1fr)}
-.card.metric{background:linear-gradient(180deg,#171c26,#12161e);border:1px solid #262d36;border-radius:14px;padding:8px 6px 6px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:76px}
-.card.metric svg{width:100%;max-width:130px;height:auto;display:block}
+.card.metric{background:linear-gradient(180deg,#171c26,#12161e);border:1px solid #262d36;border-radius:14px;padding:9px 6px 7px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:86px}
+.card.metric svg{width:100%;max-width:126px;height:auto;display:block}
 .card.metric .sv{font-size:17px;font-weight:700;color:#e6edf3;font-variant-numeric:tabular-nums;margin-bottom:3px}
 .card.metric .sl{font-size:9.5px;color:#8b949e;letter-spacing:.08em;font-weight:500;text-transform:uppercase}
+.msub{font-size:11px;color:#79c0ff;font-variant-numeric:tabular-nums;margin-top:2px;font-weight:500;white-space:nowrap}
 .wgrid{display:grid;gap:10px;grid-template-columns:1fr}
 .card-app{background:linear-gradient(180deg,#171c26,#12161e);border:1px solid #262d36;border-radius:14px;padding:11px 13px;display:flex;flex-direction:column;justify-content:space-between;gap:8px;min-height:72px}
 .wtop{display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -268,17 +269,17 @@ if(pct>=55)return'#e3b341';
 if(pct>=30)return'#38d39f';
 return'#3fb950';
 }
-function metric(l,v,p,unit){
+function metric(l,v,p,unit,sub){
 const valStr=`${v}${unit||''}`;
 if(p==null){
-return `<div class="card metric"><span class=sv>${valStr}</span><span class=sl>${l.toUpperCase()}</span></div>`;
+return `<div class="card metric"><span class=sv>${valStr}</span><span class=sl>${l.toUpperCase()}</span>${sub?`<span class=msub>${sub}</span>`:''}</div>`;
 }
 const pct=Math.min(100,Math.max(0,p));
 const off=(119.4*(1-pct/100)).toFixed(1);
 const c=clr(pct);
-const fz=valStr.length>7?'10.5px':valStr.length>5?'12.5px':'14.5px';
+const fz=valStr.length>7?'11px':valStr.length>5?'13px':'15px';
 const arc=`<path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="${c}" stroke-width="6.5" stroke-linecap="round" stroke-dasharray="119.4" stroke-dashoffset="${off}" style="transition:stroke-dashoffset .5s ease,stroke .5s"/>`;
-return `<div class="card metric"><svg viewBox="0 0 100 58"><path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="#212733" stroke-width="6.5" stroke-linecap="round"/>${arc}<text x="50" y="37" text-anchor="middle" fill="#e6edf3" font-size="${fz}" font-weight="700" font-family="system-ui,-apple-system,sans-serif">${valStr}</text><text x="50" y="52" text-anchor="middle" fill="#8b949e" font-size="9px" letter-spacing="0.08em" font-family="system-ui,-apple-system,sans-serif">${l.toUpperCase()}</text></svg></div>`}
+return `<div class="card metric"><svg viewBox="0 0 100 58"><path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="#212733" stroke-width="6.5" stroke-linecap="round"/>${arc}<text x="50" y="37" text-anchor="middle" fill="#e6edf3" font-size="${fz}" font-weight="700" font-family="system-ui,-apple-system,sans-serif">${valStr}</text><text x="50" y="52" text-anchor="middle" fill="#8b949e" font-size="9px" letter-spacing="0.08em" font-family="system-ui,-apple-system,sans-serif">${l.toUpperCase()}</text></svg>${sub?`<span class=msub>${sub}</span>`:''}</div>`}
 async function tick(){try{const d=await(await fetch('/api')).json();
 g('ts').textContent=d.time;g('live').classList.remove('off');g('h').textContent=location.hostname;
 if(d.net_rx&&d.net_tx)g('net').textContent=`↓ ${d.net_rx} · ↑ ${d.net_tx}`;
@@ -288,8 +289,14 @@ if(g('upt'))g('upt').textContent=`up ${uptimeStr}`;
 if(g('swp'))g('swp').textContent=`sw ${swapStr}`;
 const loadVal=parseFloat(d.load.split(' ')[0])||0;
 const loadPct=Math.min(100,Math.round((loadVal/(d.cores||4))*100));
-g('sys').innerHTML=metric('cpu',d.cpu,d.cpu,'%')+metric('mem',d.mem_pct,d.mem_pct,'%')
-+metric('disk',d.disk_pct,d.disk_pct,'%')+metric('load',d.load.split(' ')[0],loadPct);
+const memSub=(d.mem_used_gb!=null&&d.mem_total_gb!=null)?`${d.mem_used_gb}/${d.mem_total_gb} GB`:'';
+const diskSub=(d.disk_used_gb!=null&&d.disk_total_gb!=null)?`${d.disk_used_gb}/${d.disk_total_gb} GB`:'';
+const cpuSub=`${d.cores||1} Cores`;
+const loadSub=d.load?d.load.split(' ').slice(0,3).join(' · '):'';
+g('sys').innerHTML=metric('cpu',d.cpu,d.cpu,'%',cpuSub)
++metric('mem',d.mem_pct,d.mem_pct,'%',memSub)
++metric('disk',d.disk_pct,d.disk_pct,'%',diskSub)
++metric('load',d.load.split(' ')[0],loadPct,'',loadSub);
 g('sn').textContent=d.services.length;g('rn').textContent=d.top.length;
 g('svc').innerHTML=d.services.map(s=>`<div class=row><code>:${s.port}</code><div class=tx><b>${s.name}</b><small>${s.via} · ${s.detail}</small></div><em class=${s.ok?'ok':'bad'}>${s.ok?'●':'○'}</em></div>`).join('');
 const h=location.hostname;
@@ -712,9 +719,16 @@ def snapshot():
         if item.get("name") == "dsh-web" and tok:
             item["path"] = f"/?token={tok}"
         web_list.append(item)
+    mem_used_gb = round(used / 1048576, 1)
+    mem_tot_gb = round(m.get("MemTotal", 0) / 1048576, 1)
+    disk_used_gb = round(du.used / 1073741824, 1)
+    disk_tot_gb = round(du.total / 1073741824, 1)
     return {"time": time.strftime("%H:%M:%S"),
             "cpu": cpu_pct(), "mem_pct": round(100 * used / m["MemTotal"], 1) if m.get("MemTotal") else 0,
-            "disk_pct": round(100 * du.used / du.total, 1), "load": load, "cores": os.cpu_count() or 1,
+            "mem_used_gb": mem_used_gb, "mem_total_gb": mem_tot_gb,
+            "disk_pct": round(100 * du.used / du.total, 1),
+            "disk_used_gb": disk_used_gb, "disk_total_gb": disk_tot_gb,
+            "load": load, "cores": os.cpu_count() or 1,
             "uptime": f"{s//86400}d {s%86400//3600}h {s%3600//60}m",
             "swap_used_gb": sw_used_gb,
             "swap_total_gb": round(sw_tot / 1048576, 1) if sw_tot else 0,
