@@ -149,6 +149,93 @@ pm2 save
 
 ---
 
+## 🖥️ Command-Line Interface (`monitor` CLI)
+
+Selain web dashboard, Anda dapat memantau server dan melihat semua link akses aplikasi langsung dari terminal menggunakan perintah `monitor`:
+
+```bash
+# Setup symlink ke binary lokal (cukup sekali)
+ln -sf ~/monitor/cli.py ~/.local/bin/monitor
+chmod +x ~/monitor/cli.py
+```
+
+### Penggunaan di Terminal:
+```bash
+# 1. Tampilkan ringkasan sistem, status semua aplikasi, dan alamat aksesnya
+monitor
+
+# 2. Tampilkan token autentikasi dsh-web (DeepSeek) & panduan SSH tunneling
+monitor token
+
+# 3. Restart service monitor atau aplikasi tertentu
+monitor restart
+monitor restart sapa-server
+
+# 4. Lihat status PM2 semua service
+monitor status
+
+# 5. Baca live log aplikasi
+monitor logs monitor
+monitor logs dsh-web 100
+
+# 6. Ekspor seluruh snapshot sistem dalam format JSON
+monitor json
+```
+
+### Preview Tampilan Terminal:
+```text
+╭──────────────────────────────────────────────────────────────────────────────╮
+│  DECK • Server Monitor & Application Directory                               │
+│  Host: 100.126.4.94 (Tailscale) • 192.168.10.149 (LAN)                       │
+│  Uptime: 0d 20h 28m │ CPU: 0.0% │ RAM: 3.0/7.7GB (38.9%) │ Disk: 19.7%       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+  DAFTAR APLIKASI & ALAMAT AKSES:
+  ────────────────────────────────────────────────────────────────────────────
+  ● link-shortener     [ONLINE]  (Port: 8080 │ RAM: 19MB │ CPU: 0%)
+     ├─ Domain   : https://s.kemenkopmk.go.id
+     ├─ Tailscale: http://100.126.4.94:8080
+     └─ LAN      : http://192.168.10.149:8080
+
+  ● adminer            [ONLINE]  (Port: 9090 │ RAM: 29MB │ CPU: 0%)
+     ├─ Tailscale: http://100.126.4.94:9090
+     └─ LAN      : http://192.168.10.149:9090
+
+  ● cockpit            [ONLINE]  (Port: 9091)
+     ├─ Tailscale: http://100.126.4.94:9091
+     └─ LAN      : http://192.168.10.149:9091
+
+  ● 9router            [ONLINE]  (Port: 20128 │ RAM: 186MB │ CPU: 1.5%)
+     ├─ Tailscale: http://100.126.4.94:20128/dashboard
+     └─ LAN      : http://192.168.10.149:20128/dashboard
+
+  ● dsh-web            [ONLINE]  (Port: 3080 │ RAM: 770MB │ CPU: 5.7%)
+     ├─ Local URL: http://127.0.0.1:3080/?token=...
+     └─ Akses SSH: ssh -L 3080:localhost:3080 fata@100.126.4.94
+
+  ● hermes-dashboard   [ONLINE]  (Port: 9119 │ RAM: 149MB │ CPU: 0.3%)
+     ├─ Tailscale: http://100.126.4.94:9119
+     └─ LAN      : http://192.168.10.149:9119
+
+  ● sapa-server        [ONLINE]  (Port: 3000 │ RAM: 134MB │ CPU: 0.3%)
+     ├─ API Route: https://sapa.kemenkopmk.go.id/api/
+     ├─ Tailscale: http://100.126.4.94:3000
+     └─ LAN      : http://192.168.10.149:3000
+
+  ● deck (monitor)     [ONLINE]  (Port: 8899 │ RAM: 29MB │ CPU: 0%)
+     ├─ Tailscale: http://100.126.4.94:8899
+     ├─ LAN      : http://192.168.10.149:8899
+     └─ Login    : user: fata │ pass: 1232
+
+  ● sapa-web           [ONLINE]  (portal sapa)
+     └─ Web URL  : https://sapa.kemenkopmk.go.id
+
+  INFRASTRUKTUR & DATABASE:
+  ● ssh (:22)   ● dns (:53)   ● hermes-wa (:3105)   ● postgres (:5432)   ● redis (:6379)
+```
+
+---
+
 ## ⚙️ Variabel Lingkungan (*Environment Variables*)
 
 Semua pengaturan bersifat opsional dengan nilai bawaan yang siap pakai:
