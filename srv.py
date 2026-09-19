@@ -146,7 +146,7 @@ def valid_sid(sid):
 
 
 KNOWN = {22: "ssh", 53: "dns", 80: "nginx", 443: "nginx", 3000: "sapa-server",
-         3080: "dsh-web", 3105: "hermes-wa", 5432: "postgres", 6379: "redis",
+         3080: "dsh-web", 3105: "hermes-wa", 4080: "pub-fata", 5432: "postgres", 6379: "redis",
          8080: "link-shortener", 8899: "monitor", 9119: "hermes-dashboard",
          9090: "adminer", 9091: "cockpit", 20128: "9router"}
 HIDE = {20241}  # port internal dinamis, disembunyikan
@@ -162,6 +162,7 @@ WEB = [{"port": 8080, "name": "link-shortener", "path": "/", "desc": "s.kemenkop
        {"port": 3080, "name": "dsh-web", "path": "/", "desc": "deepseek harness", "host": "127.0.0.1"},
        {"port": 9119, "name": "hermes-dashboard", "path": "/", "desc": "hermes web ui"},
        {"port": 3000, "name": "sapa-server", "path": "/", "desc": "backend sapa"},
+       {"port": 4080, "name": "pub-fata", "path": "/", "desc": "static hosting"},
        {"port": 8899, "name": "monitor", "path": "/", "desc": "server monitor"},
        {"name": "sapa-web", "url": "https://sapa.kemenkopmk.go.id", "desc": "portal sapa"}]
 

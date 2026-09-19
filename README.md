@@ -155,8 +155,8 @@ Selain web dashboard, Anda dapat memantau server dan melihat semua link akses ap
 
 ```bash
 # Setup symlink ke binary lokal (cukup sekali)
-ln -sf ~/monitor/cli.py ~/.local/bin/monitor
-chmod +x ~/monitor/cli.py
+ln -sf ~/aplikasi/monitor/cli.py ~/.local/bin/monitor
+chmod +x ~/aplikasi/monitor/cli.py
 ```
 
 ### Penggunaan di Terminal:
@@ -187,17 +187,17 @@ monitor json
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │  DECK • Server Monitor & Application Directory                               │
 │  Host: 100.126.4.94 (Tailscale) • 192.168.10.149 (LAN)                       │
-│  Uptime: 0d 20h 28m │ CPU: 0.0% │ RAM: 3.0/7.7GB (38.9%) │ Disk: 19.7%       │
+│  Uptime: 4d 17h 20m │ CPU: 0.0% │ RAM: 3.3/7.7GB (43.6%) │ Disk: 19.5%       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
   DAFTAR APLIKASI & ALAMAT AKSES:
   ────────────────────────────────────────────────────────────────────────────
-  ● link-shortener     [ONLINE]  (Port: 8080 │ RAM: 19MB │ CPU: 0%)
+  ● link-shortener     [ONLINE]  (Port: 8080 │ RAM: 18MB │ CPU: 0%)
      ├─ Domain   : https://s.kemenkopmk.go.id
      ├─ Tailscale: http://100.126.4.94:8080
      └─ LAN      : http://192.168.10.149:8080
 
-  ● adminer            [ONLINE]  (Port: 9090 │ RAM: 29MB │ CPU: 0%)
+  ● adminer            [ONLINE]  (Port: 9090 │ RAM: 31MB │ CPU: 0%)
      ├─ Tailscale: http://100.126.4.94:9090
      └─ LAN      : http://192.168.10.149:9090
 
@@ -205,24 +205,28 @@ monitor json
      ├─ Tailscale: http://100.126.4.94:9091
      └─ LAN      : http://192.168.10.149:9091
 
-  ● 9router            [ONLINE]  (Port: 20128 │ RAM: 186MB │ CPU: 1.5%)
+  ● 9router            [ONLINE]  (Port: 20128 │ RAM: 198MB │ CPU: 0.4%)
      ├─ Tailscale: http://100.126.4.94:20128/dashboard
      └─ LAN      : http://192.168.10.149:20128/dashboard
 
-  ● dsh-web            [ONLINE]  (Port: 3080 │ RAM: 770MB │ CPU: 5.7%)
+  ● dsh-web            [ONLINE]  (Port: 3080 │ RAM: 986MB │ CPU: 3.4%)
      ├─ Local URL: http://127.0.0.1:3080/?token=...
      └─ Akses SSH: ssh -L 3080:localhost:3080 fata@100.126.4.94
 
-  ● hermes-dashboard   [ONLINE]  (Port: 9119 │ RAM: 149MB │ CPU: 0.3%)
+  ● hermes-dashboard   [ONLINE]  (Port: 9119 │ RAM: 286MB │ CPU: 0.8%)
      ├─ Tailscale: http://100.126.4.94:9119
      └─ LAN      : http://192.168.10.149:9119
 
-  ● sapa-server        [ONLINE]  (Port: 3000 │ RAM: 134MB │ CPU: 0.3%)
+  ● sapa-server        [ONLINE]  (Port: 3000 │ RAM: 105MB │ CPU: 0.2%)
      ├─ API Route: https://sapa.kemenkopmk.go.id/api/
      ├─ Tailscale: http://100.126.4.94:3000
      └─ LAN      : http://192.168.10.149:3000
 
-  ● deck (monitor)     [ONLINE]  (Port: 8899 │ RAM: 29MB │ CPU: 0%)
+  ● pub-fata           [ONLINE]  (Port: 4080 │ RAM: 77MB │ CPU: 0.2%)
+     ├─ Tailscale: http://100.126.4.94:4080
+     └─ LAN      : http://192.168.10.149:4080
+
+  ● deck (monitor)     [ONLINE]  (Port: 8899 │ RAM: 24MB │ CPU: 0%)
      ├─ Tailscale: http://100.126.4.94:8899
      ├─ LAN      : http://192.168.10.149:8899
      └─ Login    : user: fata │ pass: 1232

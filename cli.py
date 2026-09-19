@@ -12,8 +12,8 @@ import socket
 import subprocess
 import sys
 
-# Tambahkan path /home/fata/monitor jika belum ada
-MONITOR_DIR = os.path.dirname(os.path.abspath(__file__))
+# Tambahkan path direktori monitor jika belum ada
+MONITOR_DIR = os.path.dirname(os.path.realpath(__file__))
 if MONITOR_DIR not in sys.path:
     sys.path.insert(0, MONITOR_DIR)
 
