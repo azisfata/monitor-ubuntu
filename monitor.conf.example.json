@@ -1,0 +1,23 @@
+{
+  "_comment": "Monitor Ubuntu — config per mesin. Semua opsional. Env vars override file ini.",
+  "port": 8899,
+  "title": "server",
+  "users": {
+    "admin": "ganti-password-ini"
+  },
+  "web": [],
+  "known": {},
+  "hide_ports": [20241],
+  "infra_skip_apps": [22, 53, 631, 3389],
+  "max_port": 32768,
+  "systemd_units": [],
+  "alert": {
+    "interval": 300,
+    "cooldown": 3600,
+    "ram_threshold": 90,
+    "disk_threshold": 90,
+    "wa_admin": "",
+    "wa_bridge": "http://127.0.0.1:3105/send",
+    "wa_env_file": "~/.hermes/.env"
+  }
+}

@@ -18,44 +18,189 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PORT = int(os.environ.get("PORT", 8899))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONF_PATH = os.environ.get("MONITOR_CONF", os.path.join(BASE_DIR, "monitor.conf.json"))
+
+# --- Generic well-known ports (bukan milik server tertentu) ---
+GENERIC_KNOWN = {
+    22: "ssh", 53: "dns", 80: "http", 443: "https",
+    631: "cups", 3389: "rdp",
+    3000: "app-3000", 3306: "mysql", 5432: "postgres", 6379: "redis",
+    27017: "mongo", 3105: "wa-bridge",
+    4000: "app-4000", 5000: "app-5000", 8000: "app-8000", 8080: "app-8080",
+    8888: "app-8888", 8899: "monitor", 9000: "app-9000", 9090: "app-9090",
+    9091: "app-9091", 9119: "app-9119", 11000: "app-11000", 11434: "ollama",
+    18789: "openclaw", 18791: "openclaw-ws", 18888: "app-18888", 20128: "app-20128",
+}
+
+# Kandidat systemd generik — hanya yang ter-install & aktif yang ditampilkan.
+GENERIC_SYSTEMD_CANDIDATES = [
+    "docker", "ssh", "sshd", "nginx", "apache2", "tailscaled",
+    "postgresql", "mysql", "mariadb", "redis-server", "redis",
+    "ollama", "cron", "ufw", "fail2ban", "cockpit",
+]
+
+DEFAULT_CONFIG = {
+    "port": 8899,
+    "title": "server",
+    "users": {},
+    "web": [],
+    "known": {},
+    "hide_ports": [20241],
+    "infra_skip_apps": [22, 53, 631, 3389],
+    "max_port": 32768,
+    "systemd_units": [],
+    "alert": {
+        "interval": 300,
+        "cooldown": 3600,
+        "ram_threshold": 90,
+        "disk_threshold": 90,
+        "wa_admin": "",
+        "wa_bridge": "http://127.0.0.1:3105/send",
+        "wa_env_file": "~/.hermes/.env",
+    },
+}
+
+
+def load_config():
+    cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
+    # 1. file config (opsional)
+    try:
+        if os.path.isfile(CONF_PATH):
+            with open(CONF_PATH) as f:
+                file_cfg = json.load(f)
+            for k, v in file_cfg.items():
+                if k == "alert" and isinstance(v, dict):
+                    cfg["alert"].update(v)
+                else:
+                    cfg[k] = v
+    except Exception:
+        pass
+    # 2. override via env (agar cocok untuk semua mesin tanpa edit file)
+    try:
+        if os.environ.get("PORT"):
+            cfg["port"] = int(os.environ["PORT"])
+        elif os.environ.get("MONITOR_PORT"):
+            cfg["port"] = int(os.environ["MONITOR_PORT"])
+        if os.environ.get("MONITOR_TITLE"):
+            cfg["title"] = os.environ["MONITOR_TITLE"]
+        if os.environ.get("MONITOR_MAX_PORT"):
+            cfg["max_port"] = int(os.environ["MONITOR_MAX_PORT"])
+        if os.environ.get("MONITOR_HIDE_PORTS"):
+            cfg["hide_ports"] = [int(x) for x in os.environ["MONITOR_HIDE_PORTS"].split(",") if x.strip().isdigit()]
+        if os.environ.get("MONITOR_INFRA_SKIP"):
+            cfg["infra_skip_apps"] = [int(x) for x in os.environ["MONITOR_INFRA_SKIP"].split(",") if x.strip().isdigit()]
+        if os.environ.get("MONITOR_SYSTEMD_UNITS"):
+            cfg["systemd_units"] = [x.strip() for x in os.environ["MONITOR_SYSTEMD_UNITS"].split(",") if x.strip()]
+        if os.environ.get("MONITOR_KNOWN_JSON"):
+            cfg["known"].update(json.loads(os.environ["MONITOR_KNOWN_JSON"]))
+        if os.environ.get("MONITOR_WEB_JSON"):
+            cfg["web"] = json.loads(os.environ["MONITOR_WEB_JSON"])
+        # alert env
+        a = cfg["alert"]
+        if os.environ.get("MONITOR_ALERT_INTERVAL"):
+            a["interval"] = int(os.environ["MONITOR_ALERT_INTERVAL"])
+        if os.environ.get("MONITOR_ALERT_COOLDOWN"):
+            a["cooldown"] = int(os.environ["MONITOR_ALERT_COOLDOWN"])
+        if os.environ.get("MONITOR_RAM_THRESHOLD"):
+            a["ram_threshold"] = float(os.environ["MONITOR_RAM_THRESHOLD"])
+        if os.environ.get("MONITOR_DISK_THRESHOLD"):
+            a["disk_threshold"] = float(os.environ["MONITOR_DISK_THRESHOLD"])
+        if os.environ.get("MONITOR_WA_ADMIN"):
+            a["wa_admin"] = os.environ["MONITOR_WA_ADMIN"].strip()
+        if os.environ.get("MONITOR_WA_BRIDGE"):
+            a["wa_bridge"] = os.environ["MONITOR_WA_BRIDGE"].strip()
+        if os.environ.get("MONITOR_WA_ENV_FILE"):
+            a["wa_env_file"] = os.environ["MONITOR_WA_ENV_FILE"].strip()
+    except Exception:
+        pass
+    return cfg
+
+
+CONFIG = load_config()
+
+
+def get_config():
+    return CONFIG
+
+
+PORT = int(CONFIG.get("port", 8899))
+TITLE = str(CONFIG.get("title", "server"))
+GENERIC_HIDE = set(CONFIG.get("hide_ports", []))
+MAX_PORT = int(CONFIG.get("max_port", 32768))
 
 
 def _load_token():
     if os.environ.get("MONITOR_TOKEN"):
         return os.environ["MONITOR_TOKEN"]
+    tok_path = os.path.join(BASE_DIR, ".token")
     try:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".token")) as f:
-            return f.read().strip()
+        if os.path.isfile(tok_path):
+            with open(tok_path) as f:
+                t = f.read().strip()
+                if t:
+                    return t
     except Exception:
-        return "ganti-saya"
+        pass
+    # auto-generate agar tiap mesin punya secret unik (bukan "ganti-saya" global)
+    try:
+        t = secrets.token_hex(32)
+        with open(tok_path, "w") as f:
+            f.write(t)
+        try:
+            os.chmod(tok_path, 0o600)
+        except Exception:
+            pass
+        return t
+    except Exception:
+        return secrets.token_hex(32)
 
 
 TOKEN = _load_token()
-USER = {os.environ.get("MONITOR_USER", "fata"): os.environ.get("MONITOR_PASS", "1232")}
+
+
+def _load_users():
+    # prioritas: env > config file > default generik
+    env_u = os.environ.get("MONITOR_USER")
+    env_p = os.environ.get("MONITOR_PASS")
+    if env_u and env_p:
+        return {env_u: env_p}
+    cfg_users = CONFIG.get("users") or {}
+    if isinstance(cfg_users, dict) and cfg_users:
+        return {str(k): str(v) for k, v in cfg_users.items()}
+    # default generik untuk instalasi baru (wajib diganti via install.sh / env)
+    return {"admin": "admin"}
+
+
+USER = _load_users()
 SESSION_TTL = 30 * 24 * 3600  # 30 hari login
 PASS = {u: hashlib.sha256(p.encode()).hexdigest() for u, p in USER.items()}
 
 
 def _load_wa_admin():
-    if os.environ.get("MONITOR_WA_ADMIN"):
-        return os.environ["MONITOR_WA_ADMIN"].strip()
+    a = CONFIG.get("alert", {})
+    if a.get("wa_admin"):
+        return str(a["wa_admin"]).strip()
     try:
-        env_path = "/home/fata/.hermes/.env"
+        env_path = os.path.expanduser(a.get("wa_env_file", "~/.hermes/.env"))
         if os.path.isfile(env_path):
             with open(env_path) as f:
                 for line in f:
                     if line.startswith("WHATSAPP_ALLOWED_USERS="):
                         val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        return val.split(",")[0].strip()
+                        if val:
+                            return val.split(",")[0].strip()
     except Exception:
         pass
     return None
 
 
 _WA_ADMIN = _load_wa_admin()
-ALERT_INTERVAL = int(os.environ.get("MONITOR_ALERT_INTERVAL", 300))  # Pengecekan tiap 5 menit
-ALERT_COOLDOWN = int(os.environ.get("MONITOR_ALERT_COOLDOWN", 3600))  # Jeda cooldown 1 jam
+_WA_BRIDGE = CONFIG.get("alert", {}).get("wa_bridge", "http://127.0.0.1:3105/send")
+ALERT_INTERVAL = int(CONFIG.get("alert", {}).get("interval", 300))
+ALERT_COOLDOWN = int(CONFIG.get("alert", {}).get("cooldown", 3600))
+RAM_THRESHOLD = float(CONFIG.get("alert", {}).get("ram_threshold", 90))
+DISK_THRESHOLD = float(CONFIG.get("alert", {}).get("disk_threshold", 90))
 _alert_cooldown = {}
 _prev_pm2_states = {}
 
@@ -68,7 +213,7 @@ def send_wa_alert(message):
             "chatId": f"{_WA_ADMIN}@s.whatsapp.net",
             "message": f"⚠️ *[SERVER MONITOR]*\n{message}"
         }).encode("utf-8")
-        req = urllib.request.Request("http://127.0.0.1:3105/send", data=payload,
+        req = urllib.request.Request(_WA_BRIDGE, data=payload,
                                      headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=5) as res:
             return res.status == 200
@@ -105,13 +250,13 @@ def alert_worker():
             if m.get("MemTotal"):
                 used_pct = round(100 * (m["MemTotal"] - m.get("MemAvailable", m["MemTotal"])) / m["MemTotal"], 1)
                 now_ts = time.time()
-                if used_pct >= 90 and now_ts - _alert_cooldown.get("ram_high", 0) > ALERT_COOLDOWN:
+                if used_pct >= RAM_THRESHOLD and now_ts - _alert_cooldown.get("ram_high", 0) > ALERT_COOLDOWN:
                     send_wa_alert(f"🚨 *RAM Kritis!*\nPemakaian RAM mencapai *{used_pct}%*.")
                     _alert_cooldown["ram_high"] = now_ts
             du = shutil.disk_usage("/")
             disk_pct = round(100 * du.used / du.total, 1)
             now_ts = time.time()
-            if disk_pct >= 90 and now_ts - _alert_cooldown.get("disk_high", 0) > ALERT_COOLDOWN:
+            if disk_pct >= DISK_THRESHOLD and now_ts - _alert_cooldown.get("disk_high", 0) > ALERT_COOLDOWN:
                 send_wa_alert(f"🚨 *Disk Storage Kritis!*\nPartisi root `/` mencapai *{disk_pct}%*.")
                 _alert_cooldown["disk_high"] = now_ts
         except Exception:
@@ -119,7 +264,9 @@ def alert_worker():
         time.sleep(ALERT_INTERVAL)
 
 
-def new_sid(user="fata"):
+def new_sid(user=None):
+    if not user:
+        user = next(iter(USER), "admin")
     exp = int(time.time()) + SESSION_TTL
     data = f"{user}:{exp}"
     sig = hmac.new(TOKEN.encode(), data.encode(), hashlib.sha256).hexdigest()
@@ -145,26 +292,29 @@ def valid_sid(sid):
     return hmac.compare_digest(sig, expected_sig)
 
 
-KNOWN = {22: "ssh", 53: "dns", 80: "nginx", 443: "nginx", 3000: "sapa-server",
-         3080: "dsh-web", 3105: "hermes-wa", 4080: "pub-fata", 5432: "postgres", 6379: "redis",
-         8080: "link-shortener", 8899: "monitor", 9119: "hermes-dashboard",
-         9090: "adminer", 9091: "cockpit", 20128: "9router"}
-HIDE = {20241}  # port internal dinamis, disembunyikan
+# Gabungan: GENERIC_KNOWN + tambahan dari config (bisa override per mesin).
+KNOWN = dict(GENERIC_KNOWN)
+try:
+    for _k, _v in (CONFIG.get("known") or {}).items():
+        KNOWN[int(_k)] = str(_v)
+except Exception:
+    pass
+HIDE = set(GENERIC_HIDE)  # port internal dinamis, disembunyikan
+# Port infra yang tidak ditampilkan di grid Apps utama (tetap ada di Ports & Services)
+try:
+    INFRA_SKIP_APPS = set(int(x) for x in CONFIG.get("infra_skip_apps", [22, 53, 631, 3389]))
+except Exception:
+    INFRA_SKIP_APPS = {22, 53, 631, 3389}
 _prev_cpu = None
 _prev_net = None
 _BIND = {}
 _PORT_NAMES = {}
+_PUBLIC = {}
 
-WEB = [{"port": 8080, "name": "link-shortener", "path": "/", "desc": "s.kemenkopmk.go.id"},
-       {"port": 9090, "name": "adminer", "path": "/", "desc": "db admin"},
-       {"port": 9091, "name": "cockpit", "path": "/", "desc": "server admin"},
-       {"port": 20128, "name": "9router", "path": "/dashboard", "desc": "tunnel dash"},
-       {"port": 3080, "name": "dsh-web", "path": "/", "desc": "deepseek harness", "host": "127.0.0.1"},
-       {"port": 9119, "name": "hermes-dashboard", "path": "/", "desc": "hermes web ui"},
-       {"port": 3000, "name": "sapa-server", "path": "/", "desc": "backend sapa"},
-       {"port": 4080, "name": "pub-fata", "path": "/", "desc": "static hosting"},
-       {"port": 8899, "name": "monitor", "path": "/", "desc": "server monitor"},
-       {"name": "sapa-web", "url": "https://sapa.kemenkopmk.go.id", "desc": "portal sapa"}]
+# Bookmark statis opsional dari config (default kosong = 100% dinamis).
+# Contoh di monitor.conf.json:
+#   "web": [{"port": 8080, "name": "myapp", "path": "/", "desc": "aplikasi saya"}]
+WEB = list(CONFIG.get("web") or [])
 
 PAGE = r"""<!doctype html><html><head><meta charset=utf-8><meta name=viewport
 content="width=device-width,initial-scale=1"><title>monitor</title><style>
@@ -456,6 +606,7 @@ def listeners(pm2_map=None):
         ports = set()
         _BIND.clear()
         _PORT_NAMES.clear()
+        _PUBLIC.clear()
         for line in out.splitlines():
             parts = line.split()
             if len(parts) < 4:
@@ -468,6 +619,18 @@ def listeners(pm2_map=None):
                 continue
             ports.add(port)
             h = ip.strip("[]")
+            # Tandai apakah port bisa diakses eksternal (0.0.0.0 / * / ::)
+            # ss menampilkan "*:port", "[::]:port", "0.0.0.0:port" untuk bind-all
+            is_public = h in ("0.0.0.0", "*", "::", "0:0:0:0:0:0:0:0")
+            if is_public:
+                _PUBLIC[port] = True
+            elif port not in _PUBLIC:
+                # cek loopback vs lan/tailscale spesifik
+                if h.startswith("127.") or h in ("::1", "::ffff:127.0.0.1"):
+                    _PUBLIC.setdefault(port, False)
+                else:
+                    # bind ke IP spesifik (LAN/Tailscale) -> anggap reachable
+                    _PUBLIC[port] = True
             if h in ("0.0.0.0", "*", "::"):
                 h = "127.0.0.1"
             _BIND.setdefault(port, h)
@@ -482,7 +645,7 @@ def listeners(pm2_map=None):
                 p_name = m_proc.group(1).split()[0].replace('"', '')
             if p_name and port not in _PORT_NAMES:
                 _PORT_NAMES[port] = p_name
-        return sorted(p for p in ports if p in KNOWN or (p < 32768 and p not in HIDE))
+        return sorted(p for p in ports if p in KNOWN or (p < MAX_PORT and p not in HIDE))
     except Exception:
         return sorted(KNOWN)
 
@@ -593,16 +756,37 @@ def docker_containers():
             name = parts[0]
             st = parts[1] if len(parts) > 1 else ""
             img = parts[2] if len(parts) > 2 else ""
-            res.append({"name": name, "status": st, "image": img, "ok": "Up" in st})
+            ports_str = parts[3] if len(parts) > 3 else ""
+            res.append({"name": name, "status": st, "image": img,
+                        "ports": ports_str, "ok": "Up" in st})
         return res
     except Exception:
         return []
 
 
+def _unit_exists(unit):
+    try:
+        r = subprocess.run(["systemctl", "cat", unit], capture_output=True,
+                           text=True, timeout=2)
+        if r.returncode == 0:
+            return True
+        r_u = subprocess.run(["systemctl", "--user", "cat", unit], capture_output=True,
+                             text=True, timeout=2)
+        return r_u.returncode == 0
+    except Exception:
+        return False
+
+
 def systemd_services():
-    units = ["tailscaled", "nginx", "docker", "ssh", "postgresql", "redis-server", "hermes-gateway"]
+    # Dinamis: pakai daftar dari config jika diisi, jika kosong auto-discover
+    # dari kandidat generik (hanya yang ter-install yang ditampilkan).
+    cfg_units = [str(x).strip() for x in (CONFIG.get("systemd_units") or []) if str(x).strip()]
+    units = cfg_units if cfg_units else GENERIC_SYSTEMD_CANDIDATES
     res = []
     for u in units:
+        # skip unit yang tidak ada di mesin ini (agar portable)
+        if not cfg_units and not _unit_exists(u):
+            continue
         try:
             r = subprocess.run(["systemctl", "is-active", u], capture_output=True, text=True, timeout=2)
             st = r.stdout.strip()
@@ -621,22 +805,30 @@ def systemd_services():
 def _clean_name(pid, raw_name, pm2_map):
     if pm2_map and pid in pm2_map:
         return pm2_map[pid]
+    # Generik: ambil basename dari cmdline agar portable antar mesin.
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as f:
             cmd = f.read().replace(b"\x00", b" ").decode(errors="ignore").strip()
     except Exception:
-        cmd = ""
-    if "whatsapp-bridge" in cmd:
-        return "whatsapp-bridge"
-    if "hermes_cli" in cmd or "hermes-agent" in cmd:
-        return "hermes"
-    if "9router" in cmd:
-        return "9router"
-    if "dsh" in cmd:
-        return "dsh"
-    if "agy" in cmd:
-        return "agy"
-    return raw_name
+        return raw_name
+    if not cmd:
+        return raw_name
+    try:
+        prog = cmd.split()[0]
+        base = os.path.basename(prog)
+        # normalisasi interpreter umum: python3 /path/app.py -> app.py
+        if base in ("python", "python3", "node", "java", "go", "bun", "deno"):
+            parts = cmd.split()
+            for tok in parts[1:]:
+                if tok.startswith("-"):
+                    continue
+                b = os.path.basename(tok)
+                if "." in b or "/" in tok:
+                    return b[:32]
+            return base
+        return base[:32]
+    except Exception:
+        return raw_name
 
 
 def top(pm2_map=None):
@@ -675,20 +867,40 @@ def site_ok(url):
         return False
 
 
-def dsh_token():
+def get_app_token(app_name):
+    """Generik: cari token=... di log PM2 untuk aplikasi apapun (bukan cuma dsh-web)."""
+    if not app_name:
+        return None
     try:
-        log_path = os.path.expanduser("~/.pm2/logs/dsh-web-out.log")
+        log_path = os.path.expanduser(f"~/.pm2/logs/{app_name}-out.log")
         if os.path.isfile(log_path):
             with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-                for line in reversed(f.readlines()):
+                for line in reversed(f.readlines()[-200:]):
                     m = re.search(r"token=([a-zA-Z0-9_-]+)", line)
                     if m:
                         return m.group(1)
-        out = subprocess.run(["pm2", "logs", "dsh-web", "--nostream", "--lines", "25"],
+        out = subprocess.run(["pm2", "logs", app_name, "--nostream", "--lines", "25"],
                              capture_output=True, text=True, timeout=2).stdout
         m = re.findall(r"token=([a-zA-Z0-9_-]+)", out)
         if m:
             return m[-1]
+    except Exception:
+        pass
+    return None
+
+
+def dsh_token():
+    # backward-compat: dulu khusus dsh-web, sekarang generik (cek semua web yg localhost-only)
+    for cand in ("dsh-web", "dsh", "deepseek", "open-webui"):
+        t = get_app_token(cand)
+        if t:
+            return t
+    try:
+        for w in (CONFIG.get("web") or []):
+            if w.get("host") == "127.0.0.1" and w.get("name"):
+                t = get_app_token(w["name"])
+                if t:
+                    return t
     except Exception:
         pass
     return None
@@ -713,13 +925,53 @@ def snapshot():
         svcs = list(ex.map(check_one, ports))
         sites = {w["name"]: ex.submit(site_ok, w["url"]).result()
                  for w in WEB if w.get("url")}
-    tok = dsh_token()
     web_list = []
+    pm2_names = {p["name"] for p in pm2_rows}
+    port_set = set(ports)
     for w in WEB:
+        # Bookmark statis dari config: hanya tampilkan jika benar-benar ada.
+        if w.get("port"):
+            if w["port"] not in port_set and w.get("name") not in pm2_names:
+                continue
+        elif w.get("url"):
+            if not sites.get(w.get("name"), False):
+                continue
         item = dict(w)
-        if item.get("name") == "dsh-web" and tok:
-            item["path"] = f"/?token={tok}"
+        # injeksi token generik untuk app localhost-only (mis. open-webui, dsh, dll)
+        try:
+            if item.get("host") == "127.0.0.1" and item.get("name") and "token=" not in str(item.get("path", "")):
+                _t = get_app_token(item["name"])
+                if _t:
+                    sep = "&" if "?" in str(item.get("path", "/")) else "?"
+                    item["path"] = f"{item.get('path', '/')}{sep}token={_t}"
+        except Exception:
+            pass
         web_list.append(item)
+    # --- DINAMIS: tambahkan semua port listening yang belum terdaftar di WEB ---
+    existing_ports = {w.get("port") for w in WEB if w.get("port")}
+    svc_by_port = {s["port"]: s for s in svcs}
+    for svc in svcs:
+        p = svc["port"]
+        if p in existing_ports or p in INFRA_SKIP_APPS:
+            continue
+        is_public = _PUBLIC.get(p, True)
+        proc = _PORT_NAMES.get(p, svc.get("name", f"port-{p}"))
+        desc = f"{svc.get('via', '?')} · {svc.get('detail', '')} · {proc}"
+        if not is_public:
+            desc += " · localhost only"
+        entry = {"port": p, "name": svc.get("name") or proc or f"port-{p}",
+                 "path": "/", "desc": desc}
+        if not is_public:
+            entry["host"] = "127.0.0.1"
+        # injeksi token jika ada (agar link localhost langsung login)
+        try:
+            _t = get_app_token(entry["name"])
+            if _t and is_public is False or (_t and entry["name"] in ("open-webui", "dsh-web")):
+                entry["path"] = f"/?token={_t}"
+        except Exception:
+            pass
+        web_list.append(entry)
+        existing_ports.add(p)
     mem_used_gb = round(used / 1048576, 1)
     mem_tot_gb = round(m.get("MemTotal", 0) / 1048576, 1)
     disk_used_gb = round(du.used / 1073741824, 1)
@@ -790,15 +1042,37 @@ class H(BaseHTTPRequestHandler):
         name, op = body.get("name", ""), body.get("op", "")
         if op not in ("restart", "stop", "start") or not name:
             return self._send(400, b"bad op/name")
+        # Dinamis: dukung PM2, Docker, lalu systemd (user & system).
+        # 1. PM2
         try:
             names = [p["name"] for p in json.loads(subprocess.run(
                 ["pm2", "jlist"], capture_output=True, text=True, timeout=5).stdout)]
         except Exception:
-            return self._send(500, b"pm2 error")
-        if name not in names:
-            return self._send(400, b"unknown app")
-        r = subprocess.run(["pm2", op, name], capture_output=True, text=True, timeout=30)
-        return self._send(200 if r.returncode == 0 else 500, (r.stderr or r.stdout or "ok").encode())
+            names = []
+        if name in names:
+            r = subprocess.run(["pm2", op, name], capture_output=True, text=True, timeout=30)
+            return self._send(200 if r.returncode == 0 else 500, (r.stderr or r.stdout or "ok").encode())
+        # 2. Docker
+        try:
+            dr = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}}"],
+                                capture_output=True, text=True, timeout=3)
+            dnames = [l.strip() for l in dr.stdout.splitlines() if l.strip()]
+        except Exception:
+            dnames = []
+        if name in dnames:
+            r = subprocess.run(["docker", op, name], capture_output=True, text=True, timeout=30)
+            return self._send(200 if r.returncode == 0 else 500, (r.stderr or r.stdout or "ok").encode())
+        # 3. systemd (user dulu, lalu system) — hanya jika unit ada
+        if _unit_exists(name):
+            for base in (["systemctl", "--user", op, name], ["systemctl", op, name]):
+                try:
+                    r = subprocess.run(base, capture_output=True, text=True, timeout=30)
+                    if r.returncode == 0:
+                        return self._send(200, b"ok")
+                except Exception:
+                    pass
+            return self._send(500, b"systemd error")
+        return self._send(400, b"unknown app")
 
     def do_GET(self):
         if self.path == "/login":
@@ -809,7 +1083,12 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if self.path == "/":
-            body, ctype = PAGE.encode(), "text/html"
+            try:
+                host = socket.gethostname()
+            except Exception:
+                host = ""
+            title_html = f"⚙️ {TITLE} · {host}" if host else f"⚙️ {TITLE}"
+            body, ctype = PAGE.replace("⚙️ server", title_html).encode(), "text/html"
         elif self.path == "/api":
             try:
                 body, ctype = json.dumps(snapshot()).encode(), "application/json"
@@ -822,20 +1101,51 @@ class H(BaseHTTPRequestHandler):
             name = qs.get("name", [""])[0]
             lines = int(qs.get("lines", [50])[0])
             lines = min(max(10, lines), 200)
+            log_text = None
+            # 1. PM2 (jika ada)
             try:
                 names = [p["name"] for p in json.loads(subprocess.run(
                     ["pm2", "jlist"], capture_output=True, text=True, timeout=5).stdout)]
             except Exception:
                 names = []
-            if name not in names:
+            if name in names:
+                try:
+                    out = subprocess.run(["pm2", "logs", name, "--lines", str(lines), "--nostream"],
+                                         capture_output=True, text=True, timeout=8)
+                    log_text = out.stdout or out.stderr or "(tidak ada log)"
+                except Exception as e:
+                    log_text = f"Error: {e}"
+            # 2. Docker (jika container ada)
+            if log_text is None:
+                try:
+                    dr = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}}"],
+                                        capture_output=True, text=True, timeout=3)
+                    dnames = [l.strip() for l in dr.stdout.splitlines() if l.strip()]
+                except Exception:
+                    dnames = []
+                if name in dnames:
+                    try:
+                        out = subprocess.run(["docker", "logs", "--tail", str(lines), name],
+                                             capture_output=True, text=True, timeout=8)
+                        log_text = out.stdout or out.stderr or "(tidak ada log)"
+                    except Exception as e:
+                        log_text = f"Error: {e}"
+            # 3. systemd/journal (jika unit ada)
+            if log_text is None and _unit_exists(name):
+                try:
+                    out = subprocess.run(
+                        ["journalctl", "--user", "-u", name, "-n", str(lines), "--no-pager"],
+                        capture_output=True, text=True, timeout=8)
+                    if not (out.stdout or "").strip():
+                        out = subprocess.run(
+                            ["journalctl", "-u", name, "-n", str(lines), "--no-pager"],
+                            capture_output=True, text=True, timeout=8)
+                    log_text = out.stdout or out.stderr or "(tidak ada log)"
+                except Exception as e:
+                    log_text = f"Error: {e}"
+            if log_text is None:
                 return self._send(400, b"unknown app")
-            try:
-                out = subprocess.run(["pm2", "logs", name, "--lines", str(lines), "--nostream"],
-                                     capture_output=True, text=True, timeout=8)
-                log_text = out.stdout or out.stderr or "(tidak ada log)"
-                body, ctype = json.dumps({"name": name, "logs": log_text}).encode(), "application/json"
-            except Exception as e:
-                body, ctype = json.dumps({"name": name, "logs": f"Error: {e}"}).encode(), "application/json"
+            body, ctype = json.dumps({"name": name, "logs": log_text}).encode(), "application/json"
         else:
             self.send_response(404)
             self.end_headers()

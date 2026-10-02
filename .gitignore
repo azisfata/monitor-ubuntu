@@ -9,6 +9,7 @@ venv/
 .token
 .env
 *.local
+monitor.conf.json
 
 # Logs
 *.log
