@@ -23,39 +23,55 @@ command -v python3 >/dev/null || { echo "butuh python3"; exit 1; }
 
 # 1. config (jangan timpa jika sudah ada)
 if [ ! -f "$CONF" ]; then
-  if [ -z "$MPASS" ]; then
-    MPASS="$(python3 -c 'import secrets; print(secrets.token_urlsafe(12))')"
-    GEN=1
-  fi
-  cat > "$CONF" <<EOF
-{
-  "port": $PORT,
-  "title": "server",
-  "users": {
-    "$MUSER": "$MPASS"
-  },
-  "web": [],
-  "known": {},
-  "hide_ports": [20241],
-  "infra_skip_apps": [22, 53, 631, 3389],
-  "max_port": 32768,
-  "systemd_units": [],
-  "alert": {
-    "interval": 300,
-    "cooldown": 3600,
-    "ram_threshold": 90,
-    "disk_threshold": 90,
-    "wa_admin": "",
-    "wa_bridge": "http://127.0.0.1:3105/send",
-    "wa_env_file": "~/.hermes/.env"
-  }
+  # Generate via python3 supaya password dengan karakter khusus (" \ & dll)
+  # tetap menghasilkan JSON yang valid.
+  MONITOR_PORT="$PORT" MONITOR_USER="$MUSER" MONITOR_PASS="$MPASS" \
+  CONF_PATH="$CONF" python3 <<'PY'
+import json, os, secrets
+
+conf_path = os.environ["CONF_PATH"]
+port = int(os.environ.get("MONITOR_PORT") or 8899)
+user = os.environ.get("MONITOR_USER") or "admin"
+pw = os.environ.get("MONITOR_PASS") or ""
+if not pw:
+    pw = secrets.token_urlsafe(12)
+
+cfg = {
+    "port": port,
+    "title": "server",
+    "users": {user: pw},
+    "web": [],
+    "known": {},
+    "hide_ports": [20241],
+    "infra_skip_apps": [22, 53, 631, 3389],
+    "max_port": 32768,
+    "systemd_units": [],
+    "probe_timeout": 1,
+    "snapshot_ttl": 2.0,
+    "docker_all": False,
+    "alert": {
+        "interval": 300,
+        "cooldown": 3600,
+        "ram_threshold": 90,
+        "disk_threshold": 90,
+        "wa_admin": "",
+        "wa_bridge": "http://127.0.0.1:3105/send",
+        "wa_env_file": "~/.hermes/.env",
+    },
 }
-EOF
-  chmod 600 "$CONF"
-  echo "    config dibuat: $CONF (user: $MUSER)"
-  if [ "${GEN:-}" = "1" ]; then
-    echo "    password auto: $MPASS  <- simpan!"
+tmp = conf_path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+os.replace(tmp, conf_path)
+os.chmod(conf_path, 0o600)
+PY
+  # Ambil password yang di-generate (kalau ada) supaya bisa ditampilkan sekali.
+  if [ -z "$MPASS" ]; then
+    MPASS="$(CONF="$CONF" MONITOR_USER="$MUSER" python3 -c 'import json,os;print(json.load(open(os.environ["CONF"]))["users"][os.environ["MONITOR_USER"]])' 2>/dev/null || true)"
   fi
+  echo "    config dibuat: $CONF (user: $MUSER)"
+  echo "    password    : $MPASS  <- simpan / ganti sekarang!"
 else
   echo "    config ada, dilewati: $CONF"
 fi
@@ -93,6 +109,15 @@ EOF
 
 systemctl --user daemon-reload
 systemctl --user enable --now monitor.service
+
+# 3b. linger: tanpa ini systemd --user ikut mati saat logout/reboot.
+if loginctl show-user "$(id -un)" -p Linger 2>/dev/null | grep -q 'Linger=yes'; then
+  echo "    linger: aktif"
+elif command -v loginctl >/dev/null; then
+  echo "    linger: belum aktif — masukkan:"
+  echo "            sudo loginctl enable-linger $(id -un)"
+  echo "          (tanpa ini service berhenti saat logout/reboot)"
+fi
 sleep 3
 systemctl --user status monitor.service --no-pager -l | head -12
 

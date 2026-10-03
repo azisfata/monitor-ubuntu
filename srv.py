@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import http.client
 import json
+import logging
 import os
 import re
 import secrets
@@ -12,6 +13,7 @@ import shutil
 import socket
 import ssl
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -20,6 +22,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONF_PATH = os.environ.get("MONITOR_CONF", os.path.join(BASE_DIR, "monitor.conf.json"))
+
+logging.basicConfig(
+    stream=sys.stderr, level=logging.INFO,
+    format="%(asctime)s monitor %(levelname)s %(message)s",
+)
+log = logging.getLogger("monitor")
 
 # --- Generic well-known ports (bukan milik server tertentu) ---
 GENERIC_KNOWN = {
@@ -32,6 +40,10 @@ GENERIC_KNOWN = {
     9091: "app-9091", 9119: "app-9119", 11000: "app-11000", 11434: "ollama",
     18789: "openclaw", 18791: "openclaw-ws", 18888: "app-18888", 20128: "app-20128",
 }
+
+# Port yang jelas-jelas bukan HTTP. Melakukan GET / ke port ini hanya membakar
+# timeout penuh (mis. DNS/TCP diam-diam menahan koneksi) tanpa info berguna.
+GENERIC_NON_HTTP = {22, 53, 631, 3389, 3306, 5432, 6379, 27017, 11211, 1883}
 
 # Kandidat systemd generik — hanya yang ter-install & aktif yang ditampilkan.
 GENERIC_SYSTEMD_CANDIDATES = [
@@ -50,6 +62,9 @@ DEFAULT_CONFIG = {
     "infra_skip_apps": [22, 53, 631, 3389],
     "max_port": 32768,
     "systemd_units": [],
+    "probe_timeout": 1,
+    "snapshot_ttl": 2.0,
+    "docker_all": False,
     "alert": {
         "interval": 300,
         "cooldown": 3600,
@@ -62,20 +77,46 @@ DEFAULT_CONFIG = {
 }
 
 
+class ConfigError(Exception):
+    """Konfigurasi tidak valid — server harus berhenti, bukan jalan dengan default."""
+
+
+def _fatal(msg):
+    print(f"\nFATAL: konfigurasi monitor tidak valid.\n{msg}\n", file=sys.stderr)
+    sys.exit(1)
+
+
+def _read_config_file():
+    """Baca monitor.conf.json. File rusak = error fatal (jangan fallback diam-diam)."""
+    if not os.path.isfile(CONF_PATH):
+        return None
+    try:
+        with open(CONF_PATH) as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ConfigError(
+            f"monitor.conf.json tidak valid JSON: {e}\n"
+            f"  file : {CONF_PATH}\n"
+            f"  fix  : perbaiki JSON-nya, atau hapus file tersebut untuk memakai default.\n"
+            f"         Contoh minimal: cp {os.path.join(BASE_DIR, 'monitor.conf.example.json')} {CONF_PATH}"
+        ) from e
+    except OSError as e:
+        raise ConfigError(f"monitor.conf.json tidak bisa dibaca: {e} ({CONF_PATH})") from e
+    if not isinstance(data, dict):
+        raise ConfigError(f"monitor.conf.json harus berisi objek JSON, bukan {type(data).__name__}")
+    return data
+
+
 def load_config():
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
-    # 1. file config (opsional)
-    try:
-        if os.path.isfile(CONF_PATH):
-            with open(CONF_PATH) as f:
-                file_cfg = json.load(f)
-            for k, v in file_cfg.items():
-                if k == "alert" and isinstance(v, dict):
-                    cfg["alert"].update(v)
-                else:
-                    cfg[k] = v
-    except Exception:
-        pass
+    # 1. file config (opsional, tapi kalau ada harus valid)
+    file_cfg = _read_config_file()
+    if file_cfg:
+        for k, v in file_cfg.items():
+            if k == "alert" and isinstance(v, dict):
+                cfg["alert"].update(v)
+            else:
+                cfg[k] = v
     # 2. override via env (agar cocok untuk semua mesin tanpa edit file)
     try:
         if os.environ.get("PORT"):
@@ -86,6 +127,10 @@ def load_config():
             cfg["title"] = os.environ["MONITOR_TITLE"]
         if os.environ.get("MONITOR_MAX_PORT"):
             cfg["max_port"] = int(os.environ["MONITOR_MAX_PORT"])
+        if os.environ.get("MONITOR_PROBE_TIMEOUT"):
+            cfg["probe_timeout"] = max(1, int(os.environ["MONITOR_PROBE_TIMEOUT"]))
+        if os.environ.get("MONITOR_SNAPSHOT_TTL"):
+            cfg["snapshot_ttl"] = max(0.0, float(os.environ["MONITOR_SNAPSHOT_TTL"]))
         if os.environ.get("MONITOR_HIDE_PORTS"):
             cfg["hide_ports"] = [int(x) for x in os.environ["MONITOR_HIDE_PORTS"].split(",") if x.strip().isdigit()]
         if os.environ.get("MONITOR_INFRA_SKIP"):
@@ -112,12 +157,22 @@ def load_config():
             a["wa_bridge"] = os.environ["MONITOR_WA_BRIDGE"].strip()
         if os.environ.get("MONITOR_WA_ENV_FILE"):
             a["wa_env_file"] = os.environ["MONITOR_WA_ENV_FILE"].strip()
-    except Exception:
-        pass
+    except Exception as e:
+        raise ConfigError(f"konfigurasi via environment variable tidak valid: {e}") from e
+
+    try:
+        cfg["port"] = int(cfg["port"])
+    except (TypeError, ValueError) as e:
+        raise ConfigError(f"port harus integer, dapat {cfg['port']!r}") from e
+    if not (1 <= cfg["port"] <= 65535):
+        raise ConfigError(f"port di luar rentang 1-65535: {cfg['port']}")
     return cfg
 
 
-CONFIG = load_config()
+try:
+    CONFIG = load_config()
+except ConfigError as e:
+    _fatal(str(e))
 
 
 def get_config():
@@ -128,6 +183,8 @@ PORT = int(CONFIG.get("port", 8899))
 TITLE = str(CONFIG.get("title", "server"))
 GENERIC_HIDE = set(CONFIG.get("hide_ports", []))
 MAX_PORT = int(CONFIG.get("max_port", 32768))
+PROBE_TIMEOUT = max(1, int(CONFIG.get("probe_timeout", 1)))
+SNAPSHOT_TTL = max(0.0, float(CONFIG.get("snapshot_ttl", 2.0)))
 
 
 def _load_token():
@@ -159,8 +216,38 @@ def _load_token():
 TOKEN = _load_token()
 
 
+def _write_config(data):
+    tmp = CONF_PATH + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, CONF_PATH)
+        os.chmod(CONF_PATH, 0o600)
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise ConfigError(f"tidak bisa menulis {CONF_PATH}: {e}") from e
+
+
+def _generate_user(user):
+    """Buat kredensial acak dan simpan ke monitor.conf.json (bukan admin/admin)."""
+    pw = secrets.token_urlsafe(12)
+    data = _read_config_file() or {}
+    users = data.get("users") or {}
+    users[user] = pw
+    data["users"] = users
+    data.setdefault("port", PORT)
+    data.setdefault("title", TITLE)
+    _write_config(data)
+    return {user: pw}
+
+
 def _load_users():
-    # prioritas: env > config file > default generik
+    # prioritas: env > config file. Tidak ada fallback default — kalau kosong,
+    # generate password acak + simpan, atau tolak start.
     env_u = os.environ.get("MONITOR_USER")
     env_p = os.environ.get("MONITOR_PASS")
     if env_u and env_p:
@@ -168,13 +255,34 @@ def _load_users():
     cfg_users = CONFIG.get("users") or {}
     if isinstance(cfg_users, dict) and cfg_users:
         return {str(k): str(v) for k, v in cfg_users.items()}
-    # default generik untuk instalasi baru (wajib diganti via install.sh / env)
-    return {"admin": "admin"}
+    if os.path.isfile(CONF_PATH):
+        # File ada tapi tidak punya user: jangan timpa, suruh admin mengisi.
+        raise ConfigError(
+            f"tidak ada user yang dikonfigurasi di {CONF_PATH}.\n"
+            f"  fix  : isi \"users\": {{\"<user>\": \"<password>\"}}, atau set env "
+            f"MONITOR_USER + MONITOR_PASS.\n"
+            f"  atau : jalankan ./install.sh untuk membuat config baru."
+        )
+    users = _generate_user(env_u or "admin")
+    u, p = next(iter(users.items()))
+    log.warning("belum ada kredensial — dibuat otomatis dan disimpan di %s", CONF_PATH)
+    print(f"\n  + kredensial dibuat: user={u}  pass={p}\n"
+          f"  (disimpan di {CONF_PATH}, ganti kapan saja)\n", file=sys.stderr)
+    return users
 
 
-USER = _load_users()
+try:
+    USER = _load_users()
+except ConfigError as e:
+    _fatal(str(e))
 SESSION_TTL = 30 * 24 * 3600  # 30 hari login
 PASS = {u: hashlib.sha256(p.encode()).hexdigest() for u, p in USER.items()}
+
+# --- Throttle login ---
+LOGIN_MAX_FAIL = 5
+LOGIN_LOCK_SEC = 300
+_login_fail = {}
+_login_lock = threading.Lock()
 
 
 def _load_wa_admin():
@@ -299,6 +407,11 @@ try:
         KNOWN[int(_k)] = str(_v)
 except Exception:
     pass
+NON_HTTP_PORTS = set(GENERIC_NON_HTTP)
+try:
+    NON_HTTP_PORTS |= {int(x) for x in (CONFIG.get("non_http_ports") or [])}
+except (TypeError, ValueError) as e:
+    raise ConfigError(f"non_http_ports harus list of integer: {e}") from e
 HIDE = set(GENERIC_HIDE)  # port internal dinamis, disembunyikan
 # Port infra yang tidak ditampilkan di grid Apps utama (tetap ada di Ports & Services)
 try:
@@ -413,6 +526,8 @@ footer{color:#484f58;font-size:12px;text-align:center;margin-top:26px}
 const g=id=>document.getElementById(id);
 let curLogApp=null;
 let _restarting={};
+function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function jsq(v){return esc(String(v==null?'':v).replace(/\\/g,'\\\\').replace(/'/g,"\\'"))}
 function clr(pct){
 if(pct>=90)return'#f85149';
 if(pct>=75)return'#f0883e';
@@ -449,7 +564,7 @@ g('sys').innerHTML=metric('cpu',d.cpu,d.cpu,'%',cpuSub)
 +metric('disk',d.disk_pct,d.disk_pct,'%',diskSub)
 +metric('load',d.load.split(' ')[0],loadPct,'',loadSub);
 g('sn').textContent=d.services.length;g('rn').textContent=d.top.length;
-g('svc').innerHTML=d.services.map(s=>`<div class=row><code>:${s.port}</code><div class=tx><b>${s.name}</b><small>${s.via} · ${s.detail}</small></div><em class=${s.ok?'ok':'bad'}>${s.ok?'●':'○'}</em></div>`).join('');
+g('svc').innerHTML=d.services.map(s=>`<div class=row><code>:${esc(s.port)}</code><div class=tx><b>${esc(s.name)}</b><small>${esc(s.via)} · ${esc(s.detail)}</small></div><em class=${s.ok?'ok':'bad'}>${s.ok?'●':'○'}</em></div>`).join('');
 const h=location.hostname;
 const pm2Map=Object.fromEntries((d.pm2||[]).map(p=>[p.name,p]));
 const knownWeb=new Set();
@@ -469,7 +584,8 @@ ok=!!svc.ok;
 }
 if(_restarting[w.name])ok=false;
 const host=w.host||h;
-const link=w.url||(w.port?`http://${host}:${w.port}${w.path||'/'}`:null);
+const _href=w.url||(w.port?`http://${host}:${w.port}${w.path||'/'}`:null);
+const link=(_href&&/^https?:\/\//i.test(_href))?_href:null;
 const sub=w.url?w.url.replace('https://',''):(w.port?`${host}:${w.port} · ${w.desc}`:(w.desc||''));
 return{name:w.name,link,sub,ok,pm2:p,restarting:!!_restarting[w.name]};
 });
@@ -483,17 +599,18 @@ items.push({name:p.name,link:null,sub:`pm2 service · ${p.status}`,ok,pm2:p,rest
 g('an').textContent=items.length;
 g('apps').innerHTML=items.map(it=>{
 const dotClass=it.restarting?'dot restarting':(it.ok?'dot ok':'dot bad');
-const tit=it.link?`<a class=wtit target=_blank rel="noreferrer noopener" href="${it.link}"><span class="${dotClass}"></span><b>${it.name}</b><span class=arr>↗</span></a>`:`<div class=wtit><span class="${dotClass}"></span><b>${it.name}</b></div>`;
-const acts=it.pm2?`<div class=aa><button class=btn title="Lihat Log" onclick="showLog('${it.pm2.name}')">📄 log</button><button class=btn title="Restart ${it.pm2.name}" onclick="act('${it.pm2.name}','restart')">↻</button>${it.pm2.status=='online'?`<button class="btn stop" title="Stop ${it.pm2.name}" onclick="act('${it.pm2.name}','stop')">■</button>`:`<button class="btn start" title="Start ${it.pm2.name}" onclick="act('${it.pm2.name}','start')">▶</button>`}</div>`:'';
-const stateLabel=it.restarting?'restarting...':(it.pm2?(!it.ok?(it.pm2.status==='online'?'starting...':it.pm2.status):'up '+it.pm2.uptime):'');
-const meta=it.pm2?`<span class=wam><span>${it.pm2.cpu}</span><span>${it.pm2.mem}</span><span>${stateLabel}</span></span>`:'';
-return `<div class=card-app><div class=wtop>${tit}${acts}</div><div class=wbot><span class=wsub>${it.sub}</span>${meta}</div></div>`;
+const tit=it.link?`<a class=wtit target=_blank rel="noreferrer noopener" href="${esc(it.link)}"><span class="${dotClass}"></span><b>${esc(it.name)}</b><span class=arr>↗</span></a>`:`<div class=wtit><span class="${dotClass}"></span><b>${esc(it.name)}</b></div>`;
+const pn=jsq(it.pm2?it.pm2.name:it.name);
+const acts=it.pm2?`<div class=aa><button class=btn title="Lihat Log" onclick="showLog('${pn}')">📄 log</button><button class=btn title="Restart ${esc(it.pm2.name)}" onclick="act('${pn}','restart')">↻</button>${it.pm2.status=='online'?`<button class="btn stop" title="Stop ${esc(it.pm2.name)}" onclick="act('${pn}','stop')">■</button>`:`<button class="btn start" title="Start ${esc(it.pm2.name)}" onclick="act('${pn}','start')">▶</button>`}</div>`:'';
+const stateLabel=it.restarting?'restarting...':(it.pm2?(!it.ok?(it.pm2.status==='online'?'starting...':esc(it.pm2.status)):'up '+esc(it.pm2.uptime)):'');
+const meta=it.pm2?`<span class=wam><span>${esc(it.pm2.cpu)}</span><span>${esc(it.pm2.mem)}</span><span>${stateLabel}</span></span>`:'';
+return `<div class=card-app><div class=wtop>${tit}${acts}</div><div class=wbot><span class=wsub>${esc(it.sub)}</span>${meta}</div></div>`;
 }).join('');
-g('ngx').innerHTML=d.nginx.map(n=>`<span class=chip>${n}</span>`).join('')||'<span class=chip>n/a</span>';g('nn').textContent=d.nginx.length;
-g('proc').innerHTML=d.top.map(p=>`<div class=row><code>${p.pid}</code><div class=tx><b>${p.name}</b></div><span class=mv>${p.mem}</span></div>`).join('');
-g('doc').innerHTML=(d.docker||[]).map(c=>`<span class="chip ${c.ok?'ok':'bad'}"><span class="dot ${c.ok?'ok':'bad'}"></span><b>${c.name}</b> <small>(${c.status})</small></span>`).join('')||'<span class=chip>tidak ada container aktif</span>';
+g('ngx').innerHTML=d.nginx.map(n=>`<span class=chip>${esc(n)}</span>`).join('')||'<span class=chip>n/a</span>';g('nn').textContent=d.nginx.length;
+g('proc').innerHTML=d.top.map(p=>`<div class=row><code>${esc(p.pid)}</code><div class=tx><b>${esc(p.name)}</b></div><span class=mv>${esc(p.mem)}</span></div>`).join('');
+g('doc').innerHTML=(d.docker||[]).map(c=>`<span class="chip ${c.ok?'ok':'bad'}"><span class="dot ${c.ok?'ok':'bad'}"></span><b>${esc(c.name)}</b> <small>(${esc(c.status)})</small></span>`).join('')||'<span class=chip>tidak ada container aktif</span>';
 g('dn').textContent=(d.docker||[]).length;
-g('sd').innerHTML=(d.systemd||[]).map(s=>`<span class="chip ${s.ok?'ok':'bad'}"><span class="dot ${s.ok?'ok':'bad'}"></span>${s.name} <small>(${s.status})</small></span>`).join('')||'<span class=chip>n/a</span>';
+g('sd').innerHTML=(d.systemd||[]).map(s=>`<span class="chip ${s.ok?'ok':'bad'}"><span class="dot ${s.ok?'ok':'bad'}"></span>${esc(s.name)} <small>(${esc(s.status)})</small></span>`).join('')||'<span class=chip>n/a</span>';
 g('sdn').textContent=(d.systemd||[]).length;
 }catch(e){console.error('tick error:',e);g('ts').textContent='offline';g('live').classList.add('off')}}setInterval(tick,3000);tick()
 async function act(name,op){if(op!='start'&&!confirm(`${op} ${name}?`))return;
@@ -654,14 +771,15 @@ def target(port):
     return _BIND.get(port, "127.0.0.1")
 
 
-def check_http(port, https=False):
+def check_http(port, https=False, timeout=None):
     host = target(port)
+    t = timeout or PROBE_TIMEOUT
     try:
         if https:
-            c = http.client.HTTPSConnection(host, port, timeout=2,
+            c = http.client.HTTPSConnection(host, port, timeout=t,
                                             context=ssl._create_unverified_context())
         else:
-            c = http.client.HTTPConnection(host, port, timeout=2)
+            c = http.client.HTTPConnection(host, port, timeout=t)
         c.request("GET", "/")
         s = c.getresponse().status
         return True, f"http {s}"
@@ -669,10 +787,10 @@ def check_http(port, https=False):
         return False, type(e).__name__
 
 
-def check_tcp(port):
+def check_tcp(port, timeout=None):
     host = target(port).split("%")[0]
     try:
-        socket.create_connection((host, port), timeout=2).close()
+        socket.create_connection((host, port), timeout=timeout or PROBE_TIMEOUT).close()
         return True, "open"
     except Exception as e:
         return False, type(e).__name__
@@ -680,13 +798,19 @@ def check_tcp(port):
 
 def check_one(port):
     name = KNOWN.get(port) or _PORT_NAMES.get(port) or f"port-{port}"
+    t = PROBE_TIMEOUT
+    # Port non-HTTP: langsung TCP. Melakukan GET / hanya menahan koneksi sampai
+    # timeout penuh tanpa informasi apa pun (mis. DNS/TCP diam saja).
+    if port in NON_HTTP_PORTS:
+        ok, d = check_tcp(port)
+        return {"port": port, "name": name, "via": "tcp", "ok": ok, "detail": d}
     if port == 443:
-        ok, d = check_http(port, https=True)
+        ok, d = check_http(port, https=True, timeout=t)
         return {"port": port, "name": name, "via": "https", "ok": ok, "detail": d}
-    ok_http, d_http = check_http(port)
+    ok_http, d_http = check_http(port, timeout=t)
     if ok_http:
         return {"port": port, "name": name, "via": "http", "ok": True, "detail": d_http}
-    ok_tcp, d_tcp = check_tcp(port)
+    ok_tcp, d_tcp = check_tcp(port, timeout=t)
     return {"port": port, "name": name, "via": "tcp", "ok": ok_tcp, "detail": d_tcp}
 
 
@@ -744,7 +868,9 @@ def nginx():
         return []
 
 
-def docker_containers():
+def docker_containers(include_stopped=None):
+    if include_stopped is None:
+        include_stopped = bool(CONFIG.get("docker_all", False))
     try:
         r = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"],
                            capture_output=True, text=True, timeout=3)
@@ -757,10 +883,16 @@ def docker_containers():
             st = parts[1] if len(parts) > 1 else ""
             img = parts[2] if len(parts) > 2 else ""
             ports_str = parts[3] if len(parts) > 3 else ""
+            ok = "Up" in st
+            # Default: hanya container yang benar-benar jalan. Container exited
+            # menumpuk berminggu-minggu dan hanya memenuhi UI.
+            if not ok and not include_stopped:
+                continue
             res.append({"name": name, "status": st, "image": img,
-                        "ports": ports_str, "ok": "Up" in st})
+                        "ports": ports_str, "ok": ok})
         return res
-    except Exception:
+    except Exception as e:
+        log.debug("docker_containers: %s", e)
         return []
 
 
@@ -906,7 +1038,7 @@ def dsh_token():
     return None
 
 
-def snapshot():
+def _build_snapshot():
     m = mem()
     used = m.get("MemTotal", 0) - m.get("MemAvailable", 0)
     sw_tot = m.get("SwapTotal", 0)
@@ -921,10 +1053,11 @@ def snapshot():
         s = int(float(f.read().split()[0]))
     pm2_rows, pm2_map = pm2()
     ports = listeners(pm2_map)
+    site_urls = [w for w in WEB if w.get("url")]
     with cf.ThreadPoolExecutor(max_workers=16) as ex:
         svcs = list(ex.map(check_one, ports))
-        sites = {w["name"]: ex.submit(site_ok, w["url"]).result()
-                 for w in WEB if w.get("url")}
+        site_futs = [ex.submit(site_ok, w["url"]) for w in site_urls]
+        sites = {w["name"]: f.result() for w, f in zip(site_urls, site_futs)}
     web_list = []
     pm2_names = {p["name"] for p in pm2_rows}
     port_set = set(ports)
@@ -992,9 +1125,70 @@ def snapshot():
             "docker": docker_containers(), "systemd": systemd_services()}
 
 
+# Cache snapshot: polling 3s dari beberapa tab tidak perlu menjalankan ulang
+# seluruh probe. TTL default 2s — cukup segar untuk refresh tapi ringan di load.
+_snap_cache = {"at": 0.0, "data": None}
+_snap_lock = threading.Lock()
+
+
+def snapshot():
+    now = time.time()
+    with _snap_lock:
+        if _snap_cache["data"] is not None and (now - _snap_cache["at"]) < SNAPSHOT_TTL:
+            return _snap_cache["data"]
+    data = _build_snapshot()
+    with _snap_lock:
+        _snap_cache["at"] = time.time()
+        _snap_cache["data"] = data
+    return data
+
+
 class H(BaseHTTPRequestHandler):
-    def log_message(self, *a):
-        pass
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *a):
+        log.debug("%s - %s", self.address_string(), fmt % a)
+
+    def _sec_headers(self, ctype=""):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        if ctype.startswith("text/html"):
+            # Tidak ada CDN & tidak ada resource eksternal. 'unsafe-inline'
+            # dipakai hanya karena script/style masih inline di PAGE.
+            self.send_header("Content-Security-Policy",
+                             "default-src 'none'; style-src 'unsafe-inline'; "
+                             "script-src 'unsafe-inline'; connect-src 'self'; "
+                             "form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+
+    def _client_ip(self):
+        return self.client_address[0] if self.client_address else "-"
+
+    def _throttled(self, ip):
+        """Return sisa detik lockout, atau 0 kalau tidak terkunci."""
+        with _login_lock:
+            fails, until = _login_fail.get(ip, (0, 0.0))
+            if fails >= LOGIN_MAX_FAIL:
+                left = until - time.time()
+                if left > 0:
+                    return int(left) + 1
+            return 0
+
+    def _note_fail(self, ip):
+        with _login_lock:
+            now = time.time()
+            # prune entri kedaluwarsa agar dict tidak tumbuh tanpa batas
+            for k in [k for k, (_, u) in _login_fail.items() if u < now]:
+                del _login_fail[k]
+            fails, until = _login_fail.get(ip, (0, 0.0))
+            fails += 1
+            _login_fail[ip] = (fails, now + LOGIN_LOCK_SEC)
+            return fails
+
+    def _note_ok(self, ip):
+        with _login_lock:
+            _login_fail.pop(ip, None)
 
     def _sid(self):
         for part in (self.headers.get("Cookie") or "").split(";"):
@@ -1007,6 +1201,7 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        self._sec_headers(ctype)
         if cookie:
             self.send_header("Set-Cookie", cookie)
         self.end_headers()
@@ -1015,21 +1210,33 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/login":
+            ip = self._client_ip()
+            left = self._throttled(ip)
+            if left:
+                log.warning("login diblokir (throttle) dari %s", ip)
+                return self._send(429, LOGIN.replace(
+                    "ERR", f"terlalu banyak percobaan. coba lagi dalam {max(1, left // 60)} menit"
+                ).encode(), "text/html")
             n = int(self.headers.get("Content-Length", 0))
             f = urllib.parse.parse_qs(self.rfile.read(n).decode())
             u, p = f.get("user", [""])[0], f.get("pass", [""])[0]
             if PASS.get(u) and hmac.compare_digest(
                     PASS[u], hashlib.sha256(p.encode()).hexdigest()):
-                sid = new_sid(u)
-                self.send_response(303)
-                self.send_header("Location", "/")
-                self.send_header("Set-Cookie", f"sid={sid}; Path=/; Max-Age={SESSION_TTL}; HttpOnly; SameSite=Lax")
-                self.end_headers()
+                self._note_ok(ip)
+                log.info("login berhasil: %s dari %s", u, ip)
+                return self._redirect(
+                    303, "/",
+                    cookie=f"sid={new_sid(u)}; Path=/; Max-Age={SESSION_TTL}; HttpOnly; SameSite=Strict")
             else:
-                self._send(200, LOGIN.replace("ERR", "user/pass salah").encode(), "text/html")
+                fails = self._note_fail(ip)
+                log.warning("login gagal dari %s (user=%r, percobaan=%d)", ip, u, fails)
+                msg = "user/pass salah"
+                if fails >= LOGIN_MAX_FAIL:
+                    msg += f" — terkunci {LOGIN_LOCK_SEC // 60} menit"
+                return self._send(200, LOGIN.replace("ERR", msg).encode(), "text/html")
             return
         if self.path == "/logout":
-            self._send(200, b"ok", cookie="sid=; Path=/; Max-Age=0")
+            self._send(200, b"ok", cookie="sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
             return
         if self.path != "/act":
             return self._send(404)
@@ -1074,14 +1281,21 @@ class H(BaseHTTPRequestHandler):
             return self._send(500, b"systemd error")
         return self._send(400, b"unknown app")
 
+    def _redirect(self, code, location, cookie=None):
+        """Respons tanpa body. Wajib Content-Length: 0 agar HTTP/1.1 tidak hang."""
+        self.send_response(code)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self._sec_headers()
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
+        self.end_headers()
+
     def do_GET(self):
         if self.path == "/login":
             return self._send(200, LOGIN.replace("ERR", "").encode(), "text/html")
         if not self._sid():
-            self.send_response(303)
-            self.send_header("Location", "/login")
-            self.end_headers()
-            return
+            return self._redirect(303, "/login")
         if self.path == "/":
             try:
                 host = socket.gethostname()
@@ -1093,9 +1307,8 @@ class H(BaseHTTPRequestHandler):
             try:
                 body, ctype = json.dumps(snapshot()).encode(), "application/json"
             except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                return
+                log.exception("snapshot gagal: %s", e)
+                return self._send(500, b'{"error":"snapshot gagal"}', "application/json")
         elif self.path.startswith("/logs?"):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             name = qs.get("name", [""])[0]
@@ -1147,18 +1360,20 @@ class H(BaseHTTPRequestHandler):
                 return self._send(400, b"unknown app")
             body, ctype = json.dumps({"name": name, "logs": log_text}).encode(), "application/json"
         else:
-            self.send_response(404)
-            self.end_headers()
-            return
+            return self._send(404, b"not found")
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self._sec_headers(ctype)
         self.end_headers()
         self.wfile.write(body)
 
 
 if __name__ == "__main__":
+    log.info("monitor start — port=%s title=%s user=%s", PORT, TITLE, ",".join(USER))
     # Start background WhatsApp watcher
     threading.Thread(target=alert_worker, daemon=True).start()
-    ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
+    try:
+        ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
+    except KeyboardInterrupt:
+        log.info("monitor stop (SIGINT)")

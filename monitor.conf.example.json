@@ -1,5 +1,5 @@
 {
-  "_comment": "Monitor Ubuntu — config per mesin. Semua opsional. Env vars override file ini.",
+  "_comment": "Monitor Ubuntu — config per mesin. Semua opsional kecuali users. Env vars override file ini.",
   "port": 8899,
   "title": "server",
   "users": {
@@ -9,8 +9,12 @@
   "known": {},
   "hide_ports": [20241],
   "infra_skip_apps": [22, 53, 631, 3389],
+  "non_http_ports": [22, 53, 631, 3389, 3306, 5432, 6379, 27017, 11211, 1883],
   "max_port": 32768,
   "systemd_units": [],
+  "probe_timeout": 1,
+  "snapshot_ttl": 2.0,
+  "docker_all": false,
   "alert": {
     "interval": 300,
     "cooldown": 3600,
