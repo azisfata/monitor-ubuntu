@@ -376,6 +376,50 @@ def _run_manager(args, action):
     return 1
 
 
+def _cred_source():
+    """Kembalikan (users_dict, asal) dari env atau monitor.conf.json."""
+    eu, ep = os.environ.get("MONITOR_USER"), os.environ.get("MONITOR_PASS")
+    if eu and ep:
+        return {eu: ep}, "env MONITOR_USER/MONITOR_PASS"
+    if srv and getattr(srv, "USER", None):
+        try:
+            return dict(srv.USER), str(getattr(srv, "CONF_PATH", "srv.USER"))
+        except Exception:
+            pass
+    conf_path = (getattr(srv, "CONF_PATH", None)
+                 if srv else None) or os.path.join(MONITOR_DIR, "monitor.conf.json")
+    if not os.path.isfile(conf_path):
+        return {}, conf_path
+    import json
+    try:
+        with open(conf_path) as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        return {}, f"{conf_path} (GAGAL BACA: {e})"
+    users = data.get("users") or {}
+    return ({str(k): str(v) for k, v in users.items()},
+            conf_path) if isinstance(users, dict) else ({}, conf_path)
+
+
+def cmd_pass(args):
+    users, source = _cred_source()
+    conf = get_conf()
+    port = conf.get("port", 8899)
+    lan_ip, ts_ip = get_network_ips()
+    print(f"{BOLD}KREDENSIAL WEB DASHBOARD{RESET}")
+    print(f"  {'URL':<6}: http://{ts_ip or lan_ip}:{port}")
+    if not users:
+        print(f"  {RED}belum ada user/password.{RESET}")
+        print(f"  config : {source}")
+        print(f"  fix    : jalankan ./install.sh, atau set MONITOR_USER + MONITOR_PASS")
+        return 1
+    for u, p in users.items():
+        print(f"  {'user':<6}: {u}")
+        print(f"  {'pass':<6}: {BOLD}{p}{RESET}")
+    print(f"  asal   : {DIM}{source}{RESET}")
+    return 0
+
+
 def cmd_help():
     conf = get_conf()
     port = conf.get("port", 8899)
@@ -390,6 +434,7 @@ def cmd_help():
     print("  monitor stop [nama]         Stop monitor / container / service")
     print("  monitor status [nama]       Status pm2 / docker / systemd")
     print("  monitor logs [nama] [lines] Log pm2 / docker / journalctl")
+    print("  monitor pass                Tampilkan user + password web dashboard")
     print("  monitor json                Snapshot JSON mentah")
     print("  monitor help                Bantuan ini")
     print()
@@ -432,6 +477,8 @@ def main():
         return _run_manager(subargs, "stop")
     elif cmd == "status":
         return cmd_status(subargs)
+    elif cmd in ("pass", "passwd", "password", "cred", "login"):
+        return cmd_pass(subargs)
     elif cmd == "json":
         if srv:
             import json
