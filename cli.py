@@ -122,9 +122,14 @@ def render_dashboard():
         host_parts.append(f"{WHITE}{lan_ip} (LAN){RESET}")
     if host_parts:
         print(box_line(f"{DIM}Host:{RESET} " + f" {DIM}•{RESET} ".join(host_parts), w))
+    batt_info = ""
+    if snap.get("battery_pct") is not None:
+        bst = str(snap.get("battery_status") or "").lower()
+        icon = "⚡" if bst == "charging" else "🔋"
+        batt_info = f" │ {icon} Baterai: {snap['battery_pct']}%"
     sys_info = (f"Uptime: {snap['uptime']} │ CPU: {snap['cpu']}% │ "
                 f"RAM: {snap['mem_used_gb']}/{snap['mem_total_gb']}GB ({snap['mem_pct']}%) │ "
-                f"Disk: {snap['disk_pct']}%")
+                f"Disk: {snap['disk_pct']}%{batt_info}")
     print(box_line(f"{DIM}{sys_info}{RESET}", w))
     print(f"{BOLD}{CYAN}╰{'─' * (w - 2)}╯{RESET}")
     print()

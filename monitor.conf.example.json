@@ -20,6 +20,7 @@
     "cooldown": 3600,
     "ram_threshold": 90,
     "disk_threshold": 90,
+    "battery_threshold": 20,
     "wa_admin": "",
     "wa_bridge": "http://127.0.0.1:3105/send",
     "wa_env_file": "~/.hermes/.env"

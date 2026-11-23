@@ -55,6 +55,7 @@
   - **Live Network Bandwidth**: Kecepatan Download ($\downarrow$ RX) & Upload ($\uparrow$ TX) real-time dari delta `/proc/net/dev`.
   - **Server Uptime**: Durasi server aktif (`up 1d 4h`).
   - **Swap Memory Detail**: Kapasitas Swap terpakai vs total (`sw 0/4G`).
+  - **Battery Monitor** (laptop): persentase baterai + status charging/discharging, sisa waktu, dan health baterai dari `/sys/class/power_supply`. Otomatis muncul sebagai badge header + gauge kelima, dan disembunyikan di mesin tanpa baterai.
   - **Live Status Pulse**: Indikator titik hijau berkedip real-time lengkap dengan waktu server.
 
 ### 2. 🚀 Unified Apps & PM2 Manager
@@ -81,6 +82,7 @@
 - Mengirim pesan WhatsApp instan via Hermes Bridge jika:
   - Ada aplikasi PM2 berstatus `errored` atau `stopped`.
   - Pemakaian RAM fisik atau Disk melebihi **90%**.
+  - Baterai laptop **discharging** di bawah **20%** (configurable).
 - **Fitur Anti-Spam Cooldown**: Jeda peringatan **1 jam** per insiden + notifikasi **Recovery** otomatis saat server pulih kembali.
 
 ---
@@ -218,6 +220,7 @@ Semua opsional. Lihat `monitor.conf.example.json`. Env var **menang** atas file 
 | `MONITOR_ALERT_COOLDOWN` | *Integer* | `3600` | Jeda anti-spam alert (detik) |
 | `MONITOR_RAM_THRESHOLD` | *Float* | `90` | Ambang RAM kritis (%) |
 | `MONITOR_DISK_THRESHOLD` | *Float* | `90` | Ambang disk kritis (%) |
+| `MONITOR_BATTERY_THRESHOLD` | *Float* | `20` | Ambang baterai lemah saat discharging (%) |
 | `MONITOR_WA_ADMIN` | *String* | dari `.env` Hermes | Nomor WhatsApp tujuan alert |
 | `MONITOR_WA_BRIDGE` | *String* | `http://127.0.0.1:3105/send` | Endpoint bridge WhatsApp |
 | `MONITOR_WA_ENV_FILE` | *String* | `~/.hermes/.env` | Sumber `WHATSAPP_ALLOWED_USERS` |

@@ -70,6 +70,7 @@ DEFAULT_CONFIG = {
         "cooldown": 3600,
         "ram_threshold": 90,
         "disk_threshold": 90,
+        "battery_threshold": 20,
         "wa_admin": "",
         "wa_bridge": "http://127.0.0.1:3105/send",
         "wa_env_file": "~/.hermes/.env",
@@ -151,6 +152,8 @@ def load_config():
             a["ram_threshold"] = float(os.environ["MONITOR_RAM_THRESHOLD"])
         if os.environ.get("MONITOR_DISK_THRESHOLD"):
             a["disk_threshold"] = float(os.environ["MONITOR_DISK_THRESHOLD"])
+        if os.environ.get("MONITOR_BATTERY_THRESHOLD"):
+            a["battery_threshold"] = float(os.environ["MONITOR_BATTERY_THRESHOLD"])
         if os.environ.get("MONITOR_WA_ADMIN"):
             a["wa_admin"] = os.environ["MONITOR_WA_ADMIN"].strip()
         if os.environ.get("MONITOR_WA_BRIDGE"):
@@ -281,6 +284,10 @@ PASS = {u: hashlib.sha256(p.encode()).hexdigest() for u, p in USER.items()}
 # --- Throttle login ---
 LOGIN_MAX_FAIL = 5
 LOGIN_LOCK_SEC = 300
+# Batas body POST agar attacker tidak bisa klaim Content-Length raksasa
+# untuk menahan thread / menghabiskan memori. Form login & JSON /act
+# hanya butuh <1 KB, jadi 64 KB sangat longgar.
+MAX_BODY = 65536
 _login_fail = {}
 _login_lock = threading.Lock()
 
@@ -309,6 +316,7 @@ ALERT_INTERVAL = int(CONFIG.get("alert", {}).get("interval", 300))
 ALERT_COOLDOWN = int(CONFIG.get("alert", {}).get("cooldown", 3600))
 RAM_THRESHOLD = float(CONFIG.get("alert", {}).get("ram_threshold", 90))
 DISK_THRESHOLD = float(CONFIG.get("alert", {}).get("disk_threshold", 90))
+BATT_THRESHOLD = float(CONFIG.get("alert", {}).get("battery_threshold", 20))
 _alert_cooldown = {}
 _prev_pm2_states = {}
 
@@ -367,6 +375,19 @@ def alert_worker():
             if disk_pct >= DISK_THRESHOLD and now_ts - _alert_cooldown.get("disk_high", 0) > ALERT_COOLDOWN:
                 send_wa_alert(f"🚨 *Disk Storage Kritis!*\nPartisi root `/` mencapai *{disk_pct}%*.")
                 _alert_cooldown["disk_high"] = now_ts
+
+            # 3. Cek baterai (laptop): hanya saat discharging di bawah ambang.
+            bat = battery()
+            if bat:
+                now_ts = time.time()
+                discharging = "discharg" in bat["status"].lower()
+                low = bat["pct"] <= BATT_THRESHOLD and discharging
+                if low and now_ts - _alert_cooldown.get("batt_low", 0) > ALERT_COOLDOWN:
+                    send_wa_alert(f"🔋 *Baterai Lemah!*\nSisa baterai *{bat['pct']}%* dan sedang discharging. Hubungkan charger.")
+                    _alert_cooldown["batt_low"] = now_ts
+                elif not low and _alert_cooldown.get("batt_low"):
+                    send_wa_alert(f"✅ *Baterai Pulih*\nBaterai kini *{bat['pct']}%* ({bat['status'] or 'n/a'}).")
+                    _alert_cooldown.pop("batt_low", None)
         except Exception:
             pass
         time.sleep(ALERT_INTERVAL)
@@ -504,11 +525,15 @@ footer{color:#484f58;font-size:12px;text-align:center;margin-top:26px}
 .lout{background:none;border:1px solid #30363d;color:#8b949e;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer}
 @media(min-width:600px){.grid{grid-template-columns:repeat(4,1fr)}.wgrid{grid-template-columns:repeat(2,1fr)}}
 @media(min-width:900px){main{padding:6px 20px 40px}.grid{grid-template-columns:repeat(4,1fr)}.wgrid{grid-template-columns:repeat(3,1fr)}}
+body.has-batt .grid{grid-template-columns:repeat(2,1fr)}
+@media(min-width:600px){body.has-batt .grid{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:900px){body.has-batt .grid{grid-template-columns:repeat(5,1fr)}}
 </style></head><body><header><b>⚙️ server</b>
 <div class=h-right>
 <span class=h-badge id=net>↓ 0 KB/s · ↑ 0 KB/s</span>
 <span class="h-badge dim" id=upt>up …</span>
 <span class="h-badge dim" id=swp>sw 0/4G</span>
+<span class="h-badge dim" id=batt style="display:none">🔋 …</span>
 <span class=live id=live><i></i><span id=ts>…</span></span>
 <button class=lout onclick="logout()">keluar</button></div></header><main>
 <section><div class=grid id=sys></div></section>
@@ -535,14 +560,25 @@ if(pct>=55)return'#e3b341';
 if(pct>=30)return'#38d39f';
 return'#3fb950';
 }
-function metric(l,v,p,unit,sub){
+function bclr(pct){
+if(pct<=10)return'#f85149';
+if(pct<=20)return'#f0883e';
+if(pct<=40)return'#e3b341';
+return'#3fb950';
+}
+function fmtH(h){
+if(!h||h<=0)return'';
+const hh=Math.floor(h),mm=Math.round((h-hh)*60);
+return `${hh}h ${mm}m`;
+}
+function metric(l,v,p,unit,sub,col){
 const valStr=`${v}${unit||''}`;
 if(p==null){
 return `<div class="card metric"><span class=sv>${valStr}</span><span class=sl>${l.toUpperCase()}</span>${sub?`<span class=msub>${sub}</span>`:''}</div>`;
 }
 const pct=Math.min(100,Math.max(0,p));
 const off=(119.4*(1-pct/100)).toFixed(1);
-const c=clr(pct);
+const c=col||clr(pct);
 const fz=valStr.length>7?'11px':valStr.length>5?'13px':'15px';
 const arc=`<path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="${c}" stroke-width="6.5" stroke-linecap="round" stroke-dasharray="119.4" stroke-dashoffset="${off}" style="transition:stroke-dashoffset .5s ease,stroke .5s"/>`;
 return `<div class="card metric"><svg viewBox="0 0 100 58"><path d="M 12 50 A 38 38 0 0 1 88 50" fill="none" stroke="#212733" stroke-width="6.5" stroke-linecap="round"/>${arc}<text x="50" y="37" text-anchor="middle" fill="#e6edf3" font-size="${fz}" font-weight="700" font-family="system-ui,-apple-system,sans-serif">${valStr}</text><text x="50" y="52" text-anchor="middle" fill="#8b949e" font-size="9px" letter-spacing="0.08em" font-family="system-ui,-apple-system,sans-serif">${l.toUpperCase()}</text></svg>${sub?`<span class=msub>${sub}</span>`:''}</div>`}
@@ -553,16 +589,34 @@ const uptimeStr=d.uptime.replace(/^0d\s*/,'').replace(/^0h\s*/,'')||d.uptime;
 const swapStr=d.swap_total_gb?`${d.swap_used_gb}/${d.swap_total_gb}G`:`${d.swap_used_gb||0}G`;
 if(g('upt'))g('upt').textContent=`up ${uptimeStr}`;
 if(g('swp'))g('swp').textContent=`sw ${swapStr}`;
+const hasBatt=d.battery_pct!=null;
+document.body.classList.toggle('has-batt',hasBatt);
+if(g('batt')){
+if(hasBatt){
+const bst=String(d.battery_status||'').toLowerCase();
+g('batt').textContent=`${bst==='charging'?'⚡':'🔋'} ${d.battery_pct}%`;
+g('batt').style.display='';
+g('batt').style.color=bclr(d.battery_pct);
+}else{g('batt').style.display='none'}
+}
 const loadVal=parseFloat(d.load.split(' ')[0])||0;
 const loadPct=Math.min(100,Math.round((loadVal/(d.cores||4))*100));
 const memSub=(d.mem_used_gb!=null&&d.mem_total_gb!=null)?`${d.mem_used_gb}/${d.mem_total_gb} GB`:'';
 const diskSub=(d.disk_used_gb!=null&&d.disk_total_gb!=null)?`${d.disk_used_gb}/${d.disk_total_gb} GB`:'';
 const cpuSub=`${d.cores||1} Cores`;
 const loadSub=d.load?d.load.split(' ').slice(0,3).join(' · '):'';
+let battSub='';
+if(hasBatt){
+const bst=String(d.battery_status||'').toLowerCase();
+const bt=fmtH(d.battery_hours);
+battSub=(bst||'battery')+(bt?` · ${bt}`:'')+(!bt&&d.battery_health!=null?` · health ${d.battery_health}%`:'');
+}
+const battMetric=hasBatt?metric('batt',d.battery_pct,d.battery_pct,'%',battSub,bclr(d.battery_pct)):'';
 g('sys').innerHTML=metric('cpu',d.cpu,d.cpu,'%',cpuSub)
 +metric('mem',d.mem_pct,d.mem_pct,'%',memSub)
 +metric('disk',d.disk_pct,d.disk_pct,'%',diskSub)
-+metric('load',d.load.split(' ')[0],loadPct,'',loadSub);
++metric('load',d.load.split(' ')[0],loadPct,'',loadSub)
++battMetric;
 g('sn').textContent=d.services.length;g('rn').textContent=d.top.length;
 g('svc').innerHTML=d.services.map(s=>`<div class=row><code>:${esc(s.port)}</code><div class=tx><b>${esc(s.name)}</b><small>${esc(s.via)} · ${esc(s.detail)}</small></div><em class=${s.ok?'ok':'bad'}>${s.ok?'●':'○'}</em></div>`).join('');
 const h=location.hostname;
@@ -682,6 +736,68 @@ def mem():
             if k in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
                 d[k.strip()] = int(v.split()[0])
     return d
+
+
+def battery():
+    """Baca baterai dari /sys/class/power_supply. None bila mesin tidak punya baterai."""
+    base = "/sys/class/power_supply"
+    try:
+        entries = sorted(os.listdir(base))
+    except OSError:
+        return None
+
+    def rd(path):
+        with open(path) as f:
+            return f.read().strip()
+
+    for name in entries:
+        d = os.path.join(base, name)
+        try:
+            with open(os.path.join(d, "type")) as f:
+                if f.read().strip() != "Battery":
+                    continue
+            pct = int(rd(os.path.join(d, "capacity")))
+        except (OSError, ValueError):
+            continue
+
+        try:
+            status = rd(os.path.join(d, "status"))
+        except OSError:
+            status = ""
+
+        # Sisa waktu: energy_now/power_now (µWh/µW). Fallback charge*volt.
+        hours = None
+        energy = power = 0
+        try:
+            energy = int(rd(os.path.join(d, "energy_now")))
+            power = int(rd(os.path.join(d, "power_now")))
+        except (OSError, ValueError):
+            try:
+                charge = int(rd(os.path.join(d, "charge_now")))
+                volt = int(rd(os.path.join(d, "voltage_now")))
+                current = int(rd(os.path.join(d, "current_now")))
+                energy, power = charge * volt / 1e6, current * volt / 1e6
+            except (OSError, ValueError):
+                pass
+        if energy > 0 and power > 0:
+            hours = round(energy / power, 2)
+
+        # Kesehatan baterai: kapasitas penuh saat ini vs desain.
+        health = None
+        for full_key, design_key in (("energy_full", "energy_full_design"),
+                                     ("charge_full", "charge_full_design")):
+            try:
+                full = int(rd(os.path.join(d, full_key)))
+                design = int(rd(os.path.join(d, design_key)))
+                if design > 0:
+                    health = round(100 * full / design, 1)
+                break
+            except (OSError, ValueError):
+                continue
+
+        return {"pct": max(0, min(100, pct)), "status": status,
+                "name": name, "hours": hours, "health": health}
+    return None
 
 
 def net_speed():
@@ -1109,6 +1225,7 @@ def _build_snapshot():
     mem_tot_gb = round(m.get("MemTotal", 0) / 1048576, 1)
     disk_used_gb = round(du.used / 1073741824, 1)
     disk_tot_gb = round(du.total / 1073741824, 1)
+    bat = battery()
     return {"time": time.strftime("%H:%M:%S"),
             "cpu": cpu_pct(), "mem_pct": round(100 * used / m["MemTotal"], 1) if m.get("MemTotal") else 0,
             "mem_used_gb": mem_used_gb, "mem_total_gb": mem_tot_gb,
@@ -1119,6 +1236,10 @@ def _build_snapshot():
             "swap_used_gb": sw_used_gb,
             "swap_total_gb": round(sw_tot / 1048576, 1) if sw_tot else 0,
             "net_rx": rx_s, "net_tx": tx_s,
+            "battery_pct": bat["pct"] if bat else None,
+            "battery_status": bat["status"] if bat else "",
+            "battery_hours": bat["hours"] if bat else None,
+            "battery_health": bat["health"] if bat else None,
             "nproc": len([p for p in os.listdir('/proc') if p.isdigit()]),
             "services": svcs, "web": web_list, "sites": sites,
             "pm2": pm2_rows, "nginx": nginx(), "top": top(pm2_map),
@@ -1190,6 +1311,22 @@ class H(BaseHTTPRequestHandler):
         with _login_lock:
             _login_fail.pop(ip, None)
 
+    def _read_body(self, limit=None):
+        """Baca body POST dengan batas. Return None kalau terlalu besar/invalid."""
+        limit = limit or MAX_BODY
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            return b""
+        if n < 0 or n > limit:
+            return None
+        if n == 0:
+            return b""
+        try:
+            return self.rfile.read(n)
+        except Exception:
+            return None
+
     def _sid(self):
         for part in (self.headers.get("Cookie") or "").split(";"):
             k, _, v = part.strip().partition("=")
@@ -1217,8 +1354,13 @@ class H(BaseHTTPRequestHandler):
                 return self._send(429, LOGIN.replace(
                     "ERR", f"terlalu banyak percobaan. coba lagi dalam {max(1, left // 60)} menit"
                 ).encode(), "text/html")
-            n = int(self.headers.get("Content-Length", 0))
-            f = urllib.parse.parse_qs(self.rfile.read(n).decode())
+            n = self._read_body()
+            if n is None:
+                return self._send(413, b"body terlalu besar")
+            try:
+                f = urllib.parse.parse_qs(n.decode())
+            except Exception:
+                return self._send(400, b"bad form")
             u, p = f.get("user", [""])[0], f.get("pass", [""])[0]
             if PASS.get(u) and hmac.compare_digest(
                     PASS[u], hashlib.sha256(p.encode()).hexdigest()):
@@ -1243,7 +1385,10 @@ class H(BaseHTTPRequestHandler):
         if not self._sid():
             return self._send(401, b"login dulu")
         try:
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            raw = self._read_body()
+            if raw is None:
+                return self._send(413, b"body terlalu besar")
+            body = json.loads(raw)
         except Exception:
             return self._send(400, b"bad json")
         name, op = body.get("name", ""), body.get("op", "")
@@ -1312,7 +1457,10 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/logs?"):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             name = qs.get("name", [""])[0]
-            lines = int(qs.get("lines", [50])[0])
+            try:
+                lines = int(qs.get("lines", [50])[0])
+            except (TypeError, ValueError):
+                lines = 50
             lines = min(max(10, lines), 200)
             log_text = None
             # 1. PM2 (jika ada)
